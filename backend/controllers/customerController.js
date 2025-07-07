@@ -1,7 +1,7 @@
-import pool from '../db.js';
+const pool = require('../db.js');
 
 // List all customers for a distributor
-export const listCustomers = async (req, res) => {
+const listCustomers = async (req, res) => {
   try {
     // Temporarily use default distributor_id for testing
     const distributor_id = req.user?.distributor_id || '11111111-1111-1111-1111-111111111111';
@@ -16,7 +16,7 @@ export const listCustomers = async (req, res) => {
 };
 
 // Get a single customer by ID
-export const getCustomerById = async (req, res) => {
+const getCustomerById = async (req, res) => {
   try {
     const { distributor_id } = req.user;
     const { customer_id } = req.params;
@@ -35,7 +35,7 @@ export const getCustomerById = async (req, res) => {
 const DEFAULT_DISTRIBUTOR_ID = '11111111-1111-1111-1111-111111111111';
 
 // Add a new customer
-export const addCustomer = async (req, res) => {
+const addCustomer = async (req, res) => {
   try {
     const distributor_id = (req.user && req.user.distributor_id) || DEFAULT_DISTRIBUTOR_ID;
     const {
@@ -72,7 +72,7 @@ export const addCustomer = async (req, res) => {
 };
 
 // Update customer details
-export const updateCustomer = async (req, res) => {
+const updateCustomer = async (req, res) => {
   try {
     const { distributor_id } = req.user;
     const { customer_id } = req.params;
@@ -103,7 +103,7 @@ export const updateCustomer = async (req, res) => {
 };
 
 // Soft delete (deactivate) customer
-export const deactivateCustomer = async (req, res) => {
+const deactivateCustomer = async (req, res) => {
   try {
     const { distributor_id } = req.user;
     const { customer_id } = req.params;
@@ -119,7 +119,7 @@ export const deactivateCustomer = async (req, res) => {
 };
 
 // Stop or resume supply to a customer
-export const setStopSupply = async (req, res) => {
+const setStopSupply = async (req, res) => {
   try {
     const { distributor_id } = req.user;
     const { customer_id } = req.params;
@@ -137,7 +137,7 @@ export const setStopSupply = async (req, res) => {
 };
 
 // List customer modification requests
-export const listModificationRequests = async (req, res) => {
+const listModificationRequests = async (req, res) => {
   try {
     const { distributor_id } = req.user;
     const result = await pool.query(
@@ -151,7 +151,7 @@ export const listModificationRequests = async (req, res) => {
 };
 
 // Create a customer modification request
-export const createModificationRequest = async (req, res) => {
+const createModificationRequest = async (req, res) => {
   try {
     const { distributor_id } = req.user;
     const { customer_id, request_type, requested_changes, reason } = req.body;
@@ -179,7 +179,7 @@ export const createModificationRequest = async (req, res) => {
 };
 
 // Assign or update preferred driver for a customer
-export const setPreferredDriver = async (req, res) => {
+const setPreferredDriver = async (req, res) => {
   try {
     const { distributor_id } = req.user;
     const { customer_id } = req.params;
@@ -203,4 +203,36 @@ export const setPreferredDriver = async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: 'Failed to assign preferred driver', details: err.message });
   }
+};
+
+// Aliases for expected route names
+const getAllCustomers = listCustomers;
+const getCustomer = getCustomerById;
+const createCustomer = addCustomer;
+const deleteCustomer = deactivateCustomer;
+
+// Stubs for missing features
+const getCustomerBalance = async (req, res) => {
+  res.json({ balance: 0, message: 'Balance feature not yet implemented.' });
+};
+const getCustomerInvoices = async (req, res) => {
+  res.json({ invoices: [], message: 'Invoices feature not yet implemented.' });
+};
+const getCustomerOrders = async (req, res) => {
+  res.json({ orders: [], message: 'Orders feature not yet implemented.' });
+};
+const getCustomerInventory = async (req, res) => {
+  res.json({ inventory: [], message: 'Inventory feature not yet implemented.' });
+};
+
+module.exports = {
+  getAllCustomers,
+  getCustomer,
+  createCustomer,
+  updateCustomer,
+  deleteCustomer,
+  getCustomerBalance,
+  getCustomerInvoices,
+  getCustomerOrders,
+  getCustomerInventory
 }; 

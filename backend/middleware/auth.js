@@ -1,44 +1,62 @@
-import admin from 'firebase-admin';
-import pool from '../db.js';
+const admin = require('firebase-admin');
+const pool = require('../db.js');
 
 // Initialize Firebase Admin (commented out for now - will be configured later)
 // admin.initializeApp({
 //   credential: admin.credential.applicationDefault(),
 // });
 
-export const authenticateUser = async (req, res, next) => {
+const authenticateUser = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'No token provided' });
     }
-
     const token = authHeader.split('Bearer ')[1];
-    
-    // For development, accept a dev token and set a valid user object
+
+    // Dev token shortcut
     if (token === 'dev-token') {
       req.user = {
-        user_id: '11111111-1111-1111-1111-111111111111',
-        distributor_id: '11111111-1111-1111-1111-111111111111',
-        role: 'super_admin',
+        uid: 'dev-token',
         email: 'admin@dist1.com',
-        firebase_uid: 'dev-token',
-        status: 'active'
+        role: 'super_admin',
+        distributor_id: null
       };
       return next();
     }
 
-    // Try to find user by token in database
-    const { rows } = await pool.query(
-      'SELECT user_id, email, distributor_id, role FROM users WHERE firebase_uid = $1 AND status = $2',
-      [token, 'active']
-    );
-
-    if (rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid token' });
+    // Try to verify Firebase token
+    let decoded;
+    try {
+      decoded = await admin.auth().verifyIdToken(token);
+    } catch (e) {
+      // Fallback: try DB lookup by firebase_uid
+      const { rows } = await pool.query(
+        'SELECT firebase_uid as uid, email, role, distributor_id FROM users WHERE firebase_uid = $1 AND status = $2',
+        [token, 'active']
+      );
+      if (rows.length === 0) {
+        return res.status(401).json({ error: 'Invalid token' });
+      }
+      req.user = rows[0];
+      if (req.user.role === 'super_admin') req.user.distributor_id = null;
+      if (!req.user.role || (!req.user.distributor_id && req.user.role !== 'super_admin')) {
+        console.warn('User missing role or distributor_id', req.user);
+      }
+      return next();
     }
 
-    req.user = rows[0];
+    // Attach user info from Firebase claims
+    req.user = {
+      uid: decoded.uid,
+      email: decoded.email,
+      role: decoded.role,
+      distributor_id: decoded.distributor_id || null
+    };
+    if (req.user.role === 'super_admin') req.user.distributor_id = null;
+    if (!req.user.role || (!req.user.distributor_id && req.user.role !== 'super_admin')) {
+      console.warn('User missing role or distributor_id', req.user);
+    }
     next();
   } catch (error) {
     console.error('Auth error:', error);
@@ -46,7 +64,7 @@ export const authenticateUser = async (req, res, next) => {
   }
 };
 
-export const requireRole = (roles) => {
+const requireRole = (roles) => {
   return async (req, res, next) => {
     try {
       if (!req.user) {
@@ -65,4 +83,8 @@ export const requireRole = (roles) => {
   };
 };
 
-export default authenticateUser; 
+module.exports = {
+  authenticateUser,
+  requireRole,
+  default: authenticateUser
+}; 

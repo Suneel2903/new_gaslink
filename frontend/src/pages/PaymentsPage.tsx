@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
+import { useAuth } from '../contexts/AuthContext';
 
 // Simple text icons (like other pages)
 const Icons = {
@@ -39,19 +39,16 @@ interface PaymentAllocation {
 interface Customer {
   customer_id: string;
   customer_name: string;
+  business_name: string;
   phone: string;
 }
 
-interface Distributor {
-  distributor_id: string;
-  distributor_name: string;
-}
+
 
 const PaymentsPage: React.FC = () => {
-  const { user } = useAuth();
+  const { distributor_id, isSuperAdmin } = useAuth();
   const [payments, setPayments] = useState<Payment[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [distributors, setDistributors] = useState<Distributor[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
@@ -73,19 +70,23 @@ const PaymentsPage: React.FC = () => {
 
   // Manual allocation state
   const [outstandingInvoices, setOutstandingInvoices] = useState<any[]>([]);
-  const [showAllocationModal, setShowAllocationModal] = useState(false);
 
   const DEFAULT_DISTRIBUTOR_ID = '11111111-1111-1111-1111-111111111111';
 
   useEffect(() => {
+    if (!isSuperAdmin && !distributor_id) return; // Wait for distributor_id
     fetchPayments();
     fetchCustomers();
-    fetchDistributors();
-  }, []);
+  }, [distributor_id, isSuperAdmin]);
 
   const fetchPayments = async () => {
     try {
-      const response = await apiClient.get('/payments');
+      let response;
+      if (isSuperAdmin) {
+        response = await apiClient.get('/payments');
+      } else {
+        response = await apiClient.get('/payments', { params: { distributorId: distributor_id } });
+      }
       setPayments(response.data);
     } catch (error) {
       console.error('Error fetching payments:', error);
@@ -96,19 +97,15 @@ const PaymentsPage: React.FC = () => {
 
   const fetchCustomers = async () => {
     try {
-      const response = await apiClient.get('/customers');
+      let response;
+      if (isSuperAdmin) {
+        response = await apiClient.get('/customers');
+      } else {
+        response = await apiClient.get('/customers', { params: { distributorId: distributor_id } });
+      }
       setCustomers(response.data);
     } catch (error) {
       console.error('Error fetching customers:', error);
-    }
-  };
-
-  const fetchDistributors = async () => {
-    try {
-      const response = await apiClient.get('/distributors');
-      setDistributors(response.data);
-    } catch (error) {
-      console.error('Error fetching distributors:', error);
     }
   };
 
@@ -389,11 +386,13 @@ const PaymentsPage: React.FC = () => {
                   required
                 >
                   <option value="">Select Customer</option>
-                  {customers.map((customer) => (
-                    <option key={customer.customer_id} value={customer.customer_id}>
-                      {customer.customer_name} - {customer.phone}
-                    </option>
-                  ))}
+                  {customers
+                    .filter(c => c.business_name?.trim())
+                    .map((customer) => (
+                      <option key={customer.customer_id} value={customer.customer_id}>
+                        {customer.business_name}
+                      </option>
+                    ))}
                 </select>
               </div>
 

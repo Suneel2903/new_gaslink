@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../services/apiClient';
+import { useAuth } from '../contexts/AuthContext';
 
 interface Customer {
   customer_id: string;
@@ -47,6 +48,7 @@ const initialForm = {
 };
 
 export const CustomersPage: React.FC = () => {
+  const { distributor_id, isSuperAdmin } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -82,9 +84,15 @@ export const CustomersPage: React.FC = () => {
     setLoading(true);
     setError('');
     try {
-      console.log('Fetching customers...');
-      const res = await api.customers.getAll();
-      console.log('Customers response:', res);
+      let res;
+      if (isSuperAdmin) {
+        res = await api.customers.getAll();
+      } else if (distributor_id) {
+        res = await api.customers.getAll(distributor_id);
+      } else {
+        setLoading(false);
+        return;
+      }
       setCustomers(res.data);
     } catch (err: any) {
       console.error('Error fetching customers:', err);
@@ -108,8 +116,9 @@ export const CustomersPage: React.FC = () => {
   };
 
   useEffect(() => {
+    if (!isSuperAdmin && !distributor_id) return;
     fetchCustomers();
-  }, []);
+  }, [distributor_id, isSuperAdmin]);
 
   useEffect(() => {
     if (activeTab === 'modification') fetchModificationRequests();

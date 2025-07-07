@@ -1,4 +1,4 @@
-import db from './db.js';
+const db = require('./db.js');
 
 console.log('🚀 Creating test data for Payments module...');
 

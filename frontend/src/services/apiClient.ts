@@ -12,17 +12,14 @@ const apiClient: AxiosInstance = axios.create({
 
 // Request interceptor to add auth token
 apiClient.interceptors.request.use(
-  (config) => {
-    // For development, use a dev token
-    const token = 'dev-token';
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+  async (config) => {
+    const authToken = localStorage.getItem('authToken');
+    if (authToken) {
+      config.headers.Authorization = `Bearer ${authToken}`;
     }
     return config;
   },
-  (error) => {
-    return Promise.reject(error);
-  }
+  (error) => Promise.reject(error)
 );
 
 // Response interceptor for error handling
@@ -31,11 +28,11 @@ apiClient.interceptors.response.use(
     return response;
   },
   (error: AxiosError) => {
-    if (error.response?.status === 401) {
-      // Unauthorized - redirect to login
-      localStorage.removeItem('authToken');
-      window.location.href = '/login';
-    }
+    // Temporarily comment out redirect to login on 401 for debugging
+    // if (error.response?.status === 401) {
+    //   localStorage.removeItem('authToken');
+    //   window.location.href = '/login';
+    // }
     return Promise.reject(error);
   }
 );
@@ -157,7 +154,7 @@ export const api = {
   cylinderPrices: {
     getLatest: () => apiClient.get('/cylinder-prices/latest'),
     insert: (data: any) => apiClient.post('/cylinder-prices', data),
-    getByMonthYear: (month: number, year: number) => apiClient.get(`/cylinder-prices/by-month-year?month=${month}&year=${year}`),
+    getByMonthYear: (month: number, year: number) => apiClient.get(`/cylinder-prices/by-month?month=${month}&year=${year}`),
   },
 };
 

@@ -24,7 +24,7 @@ const statusLabels = {
 };
 
 const InvoicesPage: React.FC = () => {
-  useAuth();
+  const { distributor_id, isSuperAdmin } = useAuth();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -54,18 +54,32 @@ const InvoicesPage: React.FC = () => {
 
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadResult, setUploadResult] = useState<any>(null);
+  const [uploadLoading, setUploadLoading] = useState(false);
+
   useEffect(() => {
+    if (!isSuperAdmin && !distributor_id) return;
     fetchInvoices();
-  }, [pagination.page, filters]);
+  }, [distributor_id, isSuperAdmin]);
 
   const fetchInvoices = async () => {
     try {
-      setLoading(true);
-      const response = await invoiceService.getAllInvoices({
-        page: pagination.page,
-        limit: pagination.limit,
-        ...filters
-      });
+      let response;
+      if (isSuperAdmin) {
+        response = await invoiceService.getAllInvoices({
+          page: pagination.page,
+          limit: pagination.limit,
+          ...filters
+        });
+      } else {
+        response = await invoiceService.getAllInvoices({
+          page: pagination.page,
+          limit: pagination.limit,
+          distributor_id,
+          ...filters
+        });
+      }
       setInvoices(response.invoices);
       setPagination(response.pagination);
     } catch (err) {
@@ -222,6 +236,25 @@ const InvoicesPage: React.FC = () => {
     } finally {
       setDownloadingId(null);
     }
+  };
+
+  // --- OCR Invoice Upload ---
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setUploadFile(e.target.files[0]);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!uploadFile) return;
+    setUploadLoading(true);
+    try {
+      const result = await invoiceService.uploadInvoicePDF(uploadFile);
+      setUploadResult(result);
+    } catch (err: any) {
+      setUploadResult({ error: err?.response?.data?.error || err.message });
+    }
+    setUploadLoading(false);
   };
 
   if (loading) {
@@ -648,6 +681,31 @@ const InvoicesPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      <div className="mb-8 p-4 border rounded bg-gray-50">
+        <h2 className="text-lg font-semibold mb-2">Upload IOCL Invoice PDF (OCR)</h2>
+        <input type="file" accept="application/pdf" onChange={handleFileChange} />
+        <button
+          className="ml-2 px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
+          onClick={handleUpload}
+          disabled={uploadLoading || !uploadFile}
+        >
+          {uploadLoading ? 'Uploading...' : 'Upload'}
+        </button>
+        {uploadResult && (
+          <div className="mt-4">
+            {uploadResult.error ? (
+              <div className="text-red-600">Error: {uploadResult.error}</div>
+            ) : (
+              <div>
+                <div className="font-semibold mb-2">Extracted Items:</div>
+                <pre className="bg-gray-100 p-2 rounded text-xs overflow-x-auto">{JSON.stringify(uploadResult, null, 2)}</pre>
+                {/* TODO: Render as table for better UX */}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

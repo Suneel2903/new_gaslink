@@ -1,4 +1,4 @@
-import db from './db.js';
+const db = require('./db.js');
 
 console.log('🚀 Testing Payments Module - Direct Database Access...');
 console.log('==================================================');

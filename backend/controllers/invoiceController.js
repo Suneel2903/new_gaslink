@@ -1,11 +1,12 @@
-import db from '../db.js';
-import { v4 as uuidv4 } from 'uuid';
-import PDFDocument from 'pdfkit';
-import fs from 'fs';
-import path from 'path';
+const db = require('../db.js');
+const { v4: uuidv4 } = require('uuid');
+const PDFDocument = require('pdfkit');
+const fs = require('fs');
+const path = require('path');
+const { getEffectiveUserId } = require('../utils/authUtils');
 
 // Create invoice from delivered order
-export const createInvoiceFromOrder = async (req, res) => {
+const createInvoiceFromOrder = async (req, res) => {
     const { order_id } = req.params;
     const { distributor_id } = req.user; // From auth middleware
     const { issued_by } = req.user; // User creating the invoice
@@ -192,36 +193,66 @@ export const createInvoiceFromOrder = async (req, res) => {
 };
 
 // Get invoice by ID
-export const getInvoice = async (req, res) => {
+const getInvoice = async (req, res) => {
     const { id } = req.params;
-    const { distributor_id } = req.user;
+    const { role, distributor_id } = req.user;
 
     try {
-        const query = `
-            SELECT i.*, 
-                   c.business_name, c.contact_person, c.phone, c.email,
-                   c.address_line1, c.city, c.state, c.postal_code,
-                   json_agg(
-                       json_build_object(
-                           'invoice_item_id', ii.invoice_item_id,
-                           'cylinder_type_id', ii.cylinder_type_id,
-                           'quantity', ii.quantity,
-                           'unit_price', ii.unit_price,
-                           'discount_per_unit', ii.discount_per_unit,
-                           'total_price', ii.total_price,
-                           'cylinder_type_name', ct.name
-                       )
-                   ) as items
-            FROM invoices i
-            LEFT JOIN customers c ON i.customer_id = c.customer_id
-            LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
-            LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
-            WHERE i.invoice_id = $1 AND i.distributor_id = $2
-            GROUP BY i.invoice_id, c.business_name, c.contact_person, c.phone, c.email,
-                     c.address_line1, c.city, c.state, c.postal_code
-        `;
+        let query, params;
         
-        const result = await db.query(query, [id, distributor_id]);
+        if (role === 'super_admin') {
+            query = `
+                SELECT i.*, 
+                       c.business_name, c.contact_person, c.phone, c.email,
+                       c.address_line1, c.city, c.state, c.postal_code,
+                       json_agg(
+                           json_build_object(
+                               'invoice_item_id', ii.invoice_item_id,
+                               'cylinder_type_id', ii.cylinder_type_id,
+                               'quantity', ii.quantity,
+                               'unit_price', ii.unit_price,
+                               'discount_per_unit', ii.discount_per_unit,
+                               'total_price', ii.total_price,
+                               'cylinder_type_name', ct.name
+                           )
+                       ) as items
+                FROM invoices i
+                LEFT JOIN customers c ON i.customer_id = c.customer_id
+                LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
+                LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
+                WHERE i.invoice_id = $1 AND i.deleted_at IS NULL
+                GROUP BY i.invoice_id, c.business_name, c.contact_person, c.phone, c.email,
+                         c.address_line1, c.city, c.state, c.postal_code
+            `;
+            params = [id];
+        } else {
+            query = `
+                SELECT i.*, 
+                       c.business_name, c.contact_person, c.phone, c.email,
+                       c.address_line1, c.city, c.state, c.postal_code,
+                       json_agg(
+                           json_build_object(
+                               'invoice_item_id', ii.invoice_item_id,
+                               'cylinder_type_id', ii.cylinder_type_id,
+                               'quantity', ii.quantity,
+                               'unit_price', ii.unit_price,
+                               'discount_per_unit', ii.discount_per_unit,
+                               'total_price', ii.total_price,
+                               'cylinder_type_name', ct.name
+                           )
+                       ) as items
+                FROM invoices i
+                LEFT JOIN customers c ON i.customer_id = c.customer_id
+                LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
+                LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
+                WHERE i.invoice_id = $1 AND i.distributor_id = $2 AND i.deleted_at IS NULL
+                GROUP BY i.invoice_id, c.business_name, c.contact_person, c.phone, c.email,
+                         c.address_line1, c.city, c.state, c.postal_code
+            `;
+            params = [id, distributor_id];
+        }
+        
+        const result = await db.query(query, params);
         
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Invoice not found' });
@@ -254,12 +285,14 @@ function parseDisputeRow(row) {
 }
 
 // Raise dispute on invoice
-export const raiseDispute = async (req, res) => {
+const raiseDispute = async (req, res) => {
+    console.log('User Info (raiseDispute):', req.user);
     const { id } = req.params;
-    if (!req.user || !req.user.user_id) {
+    const userId = getEffectiveUserId(req.user);
+    if (!req.user || !userId) {
         return res.status(401).json({ error: 'User authentication required to raise dispute' });
     }
-    const { distributor_id, user_id } = req.user;
+    const { role, distributor_id } = req.user;
     const { reason, dispute_type, disputed_amount, disputed_quantities, description } = req.body;
 
     if (!reason || !dispute_type) {
@@ -267,16 +300,29 @@ export const raiseDispute = async (req, res) => {
     }
 
     try {
-        // Check if invoice exists and belongs to distributor
-        const invoiceQuery = `
-            SELECT invoice_id FROM invoices 
-            WHERE invoice_id = $1 AND distributor_id = $2
-        `;
-        const invoiceResult = await db.query(invoiceQuery, [id, distributor_id]);
+        // Check if invoice exists and belongs to distributor (or is accessible by super admin)
+        let invoiceQuery, invoiceParams;
+        if (role === 'super_admin') {
+            invoiceQuery = `
+                SELECT invoice_id, distributor_id FROM invoices 
+                WHERE invoice_id = $1 AND deleted_at IS NULL
+            `;
+            invoiceParams = [id];
+        } else {
+            invoiceQuery = `
+                SELECT invoice_id, distributor_id FROM invoices 
+                WHERE invoice_id = $1 AND distributor_id = $2 AND deleted_at IS NULL
+            `;
+            invoiceParams = [id, distributor_id];
+        }
+        const invoiceResult = await db.query(invoiceQuery, invoiceParams);
         
         if (invoiceResult.rows.length === 0) {
             return res.status(404).json({ error: 'Invoice not found' });
         }
+
+        const invoice = invoiceResult.rows[0];
+        const effectiveDistributorId = role === 'super_admin' ? invoice.distributor_id : distributor_id;
 
         // Check if dispute already exists
         const existingDisputeQuery = `
@@ -297,12 +343,12 @@ export const raiseDispute = async (req, res) => {
             RETURNING *
         `;
         const disputeResult = await db.query(disputeQuery, [
-            id, user_id, reason, 'pending', dispute_type, disputed_amount || null, disputed_quantities ? JSON.stringify(disputed_quantities) : null, description || null
+            id, userId, reason, 'pending', dispute_type, disputed_amount || null, disputed_quantities ? JSON.stringify(disputed_quantities) : null, description || null
         ]);
 
         // If quantity dispute, create pending manual inventory adjustments
         if (dispute_type === 'quantity' && disputed_quantities) {
-            for (const [cylinder_type_id, qty] of Object.entries(disputed_quantities)) {
+            for (const [cylinder_type_id, qty] of Object.entries(disputed_quantities || {})) {
                 const adjustmentQuery = `
                     INSERT INTO manual_inventory_adjustments (
                         distributor_id, cylinder_type_id, adjusted_by,
@@ -311,7 +357,7 @@ export const raiseDispute = async (req, res) => {
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 `;
                 await db.query(adjustmentQuery, [
-                    distributor_id, cylinder_type_id, user_id,
+                    effectiveDistributorId, cylinder_type_id, userId,
                     'add', qty, 'Dispute raised – quantity adjustment',
                     'pending', 'invoice_dispute', disputeResult.rows[0].dispute_id
                 ]);
@@ -338,9 +384,11 @@ export const raiseDispute = async (req, res) => {
 };
 
 // Issue credit note
-export const issueCreditNote = async (req, res) => {
+const issueCreditNote = async (req, res) => {
+    console.log('User Info (issueCreditNote):', req.user);
     const { id } = req.params;
-    const { distributor_id, user_id } = req.user;
+    const userId = getEffectiveUserId(req.user);
+    const { role, distributor_id } = req.user;
     const { amount, reason } = req.body;
 
     if (!amount || !reason) {
@@ -349,14 +397,27 @@ export const issueCreditNote = async (req, res) => {
     if (isNaN(Number(amount)) || Number(amount) <= 0) {
         return res.status(400).json({ error: 'Amount must be a positive number' });
     }
+    if (!req.user || !userId) {
+        return res.status(401).json({ error: 'User authentication required to issue credit note' });
+    }
 
     try {
-        // Check if invoice exists and belongs to distributor
-        const invoiceQuery = `
-            SELECT invoice_id, total_amount FROM invoices 
-            WHERE invoice_id = $1 AND distributor_id = $2
-        `;
-        const invoiceResult = await db.query(invoiceQuery, [id, distributor_id]);
+        // Check if invoice exists and belongs to distributor (or is accessible by super admin)
+        let invoiceQuery, invoiceParams;
+        if (role === 'super_admin') {
+            invoiceQuery = `
+                SELECT invoice_id, total_amount FROM invoices 
+                WHERE invoice_id = $1 AND deleted_at IS NULL
+            `;
+            invoiceParams = [id];
+        } else {
+            invoiceQuery = `
+                SELECT invoice_id, total_amount FROM invoices 
+                WHERE invoice_id = $1 AND distributor_id = $2 AND deleted_at IS NULL
+            `;
+            invoiceParams = [id, distributor_id];
+        }
+        const invoiceResult = await db.query(invoiceQuery, invoiceParams);
         
         if (invoiceResult.rows.length === 0) {
             return res.status(404).json({ error: 'Invoice not found' });
@@ -376,7 +437,7 @@ export const issueCreditNote = async (req, res) => {
             ) VALUES ($1, $2, $3, $4)
             RETURNING *
         `;
-        const creditNoteResult = await db.query(creditNoteQuery, [id, amount, reason, user_id]);
+        const creditNoteResult = await db.query(creditNoteQuery, [id, amount, reason, userId]);
 
         // Update invoice status to pending_approval
         const updateInvoiceStatusQuery2 = `
@@ -398,35 +459,57 @@ export const issueCreditNote = async (req, res) => {
 };
 
 // Cancel invoice
-export const cancelInvoice = async (req, res) => {
+const cancelInvoice = async (req, res) => {
+    console.log('User Info (cancelInvoice):', req.user);
     const { id } = req.params;
-    if (!req.user || !req.user.user_id) {
+    const userId = getEffectiveUserId(req.user);
+    if (!req.user || !userId) {
         return res.status(401).json({ error: 'User authentication required to cancel invoice' });
     }
-    const { distributor_id, user_id } = req.user;
+    const { role, distributor_id } = req.user;
 
     try {
         // Check if invoice exists and can be cancelled
-        const invoiceQuery = `
-            SELECT i.*, 
-                   json_agg(
-                       json_build_object(
-                           'cylinder_type_id', ii.cylinder_type_id,
-                           'quantity', ii.quantity
-                       )
-                   ) as items
-            FROM invoices i
-            LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
-            WHERE i.invoice_id = $1 AND i.distributor_id = $2
-            GROUP BY i.invoice_id
-        `;
-        const invoiceResult = await db.query(invoiceQuery, [id, distributor_id]);
+        let invoiceQuery, invoiceParams;
+        if (role === 'super_admin') {
+            invoiceQuery = `
+                SELECT i.*, 
+                       json_agg(
+                           json_build_object(
+                               'cylinder_type_id', ii.cylinder_type_id,
+                               'quantity', ii.quantity
+                           )
+                       ) as items
+                FROM invoices i
+                LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
+                WHERE i.invoice_id = $1 AND i.deleted_at IS NULL
+                GROUP BY i.invoice_id
+            `;
+            invoiceParams = [id];
+        } else {
+            invoiceQuery = `
+                SELECT i.*, 
+                       json_agg(
+                           json_build_object(
+                               'cylinder_type_id', ii.cylinder_type_id,
+                               'quantity', ii.quantity
+                           )
+                       ) as items
+                FROM invoices i
+                LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
+                WHERE i.invoice_id = $1 AND i.distributor_id = $2 AND i.deleted_at IS NULL
+                GROUP BY i.invoice_id
+            `;
+            invoiceParams = [id, distributor_id];
+        }
+        const invoiceResult = await db.query(invoiceQuery, invoiceParams);
         
         if (invoiceResult.rows.length === 0) {
             return res.status(404).json({ error: 'Invoice not found' });
         }
 
         const invoice = invoiceResult.rows[0];
+        const effectiveDistributorId = role === 'super_admin' ? invoice.distributor_id : distributor_id;
 
         // Check if invoice can be cancelled (not already cancelled or paid)
         if (invoice.status === 'cancelled') {
@@ -456,7 +539,7 @@ export const cancelInvoice = async (req, res) => {
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             `;
             await db.query(adjustmentQuery, [
-                distributor_id, item.cylinder_type_id, user_id,
+                effectiveDistributorId, item.cylinder_type_id, userId,
                 'add', item.quantity, 'Invoice cancelled – stock adjustment',
                 'pending', 'invoice', id
             ]);
@@ -479,27 +562,45 @@ export const cancelInvoice = async (req, res) => {
 };
 
 // Update invoice statuses (cron job endpoint)
-export const updateInvoiceStatuses = async (req, res) => {
-    const { distributor_id } = req.user;
+const updateInvoiceStatuses = async (req, res) => {
+    const { role, distributor_id } = req.user;
 
     try {
-        // Update overdue invoices
-        const overdueQuery = `
-            UPDATE invoices 
-            SET status = 'overdue'
-            WHERE distributor_id = $1 
-              AND status IN ('issued', 'partially_paid')
-              AND due_date < CURRENT_DATE
-        `;
-        const overdueResult = await db.query(overdueQuery, [distributor_id]);
-
-        // Get overdue count for response
-        const overdueCountQuery = `
-            SELECT COUNT(*) as count
-            FROM invoices 
-            WHERE distributor_id = $1 AND status = 'overdue'
-        `;
-        const overdueCountResult = await db.query(overdueCountQuery, [distributor_id]);
+        let overdueQuery, overdueCountQuery, params;
+        
+        if (role === 'super_admin') {
+            // Update overdue invoices for all distributors
+            overdueQuery = `
+                UPDATE invoices 
+                SET status = 'overdue'
+                WHERE status IN ('issued', 'partially_paid')
+                  AND due_date < CURRENT_DATE
+            `;
+            overdueCountQuery = `
+                SELECT COUNT(*) as count
+                FROM invoices 
+                WHERE status = 'overdue'
+            `;
+            params = [];
+        } else {
+            // Update overdue invoices for specific distributor
+            overdueQuery = `
+                UPDATE invoices 
+                SET status = 'overdue'
+                WHERE distributor_id = $1 
+                  AND status IN ('issued', 'partially_paid')
+                  AND due_date < CURRENT_DATE
+            `;
+            overdueCountQuery = `
+                SELECT COUNT(*) as count
+                FROM invoices 
+                WHERE distributor_id = $1 AND status = 'overdue'
+            `;
+            params = [distributor_id];
+        }
+        
+        const overdueResult = await db.query(overdueQuery, params);
+        const overdueCountResult = await db.query(overdueCountQuery, params);
 
         res.json({
             message: 'Invoice statuses updated successfully',
@@ -514,14 +615,22 @@ export const updateInvoiceStatuses = async (req, res) => {
 };
 
 // Get all invoices for distributor
-export const getAllInvoices = async (req, res) => {
-    const { distributor_id } = req.user;
+const getAllInvoices = async (req, res) => {
+    const { role, distributor_id } = req.user;
     const { status, customer_id, page = 1, limit = 10 } = req.query;
 
     try {
-        let whereClause = 'WHERE i.distributor_id = $1';
-        let params = [distributor_id];
-        let paramCount = 1;
+        let whereClause = '';
+        let params = [];
+        let paramCount = 0;
+
+        if (role === 'super_admin') {
+            whereClause = 'WHERE 1=1';
+        } else {
+            paramCount++;
+            whereClause = 'WHERE i.distributor_id = $1';
+            params.push(distributor_id);
+        }
 
         if (status) {
             paramCount++;
@@ -547,24 +656,46 @@ export const getAllInvoices = async (req, res) => {
         // Get invoices with pagination
         const offset = (page - 1) * limit;
         paramCount++;
-        const query = `
-            SELECT i.*, 
-                   c.business_name, c.contact_person,
-                   COALESCE(
-                       (SELECT SUM(amount) FROM credit_notes WHERE invoice_id = i.invoice_id),
-                       0
-                   ) as total_credits,
-                   (i.total_amount - COALESCE(
-                       (SELECT SUM(amount) FROM credit_notes WHERE invoice_id = i.invoice_id),
-                       0
-                   )) as outstanding_amount
-            FROM invoices i
-            LEFT JOIN customers c ON i.customer_id = c.customer_id
-            ${whereClause}
-            ORDER BY i.created_at DESC
-            LIMIT $${paramCount} OFFSET $${paramCount + 1}
-        `;
-        params.push(limit, offset);
+        let query;
+        if (role === 'super_admin') {
+            query = `
+                SELECT i.*, 
+                       c.business_name, c.contact_person,
+                       COALESCE(
+                           (SELECT SUM(amount) FROM credit_notes WHERE invoice_id = i.invoice_id),
+                           0
+                       ) as total_credits,
+                       (i.total_amount - COALESCE(
+                           (SELECT SUM(amount) FROM credit_notes WHERE invoice_id = i.invoice_id),
+                           0
+                       )) as outstanding_amount
+                FROM invoices i
+                LEFT JOIN customers c ON i.customer_id = c.customer_id
+                ${whereClause}
+                ORDER BY i.created_at DESC
+                LIMIT $1 OFFSET $2
+            `;
+            params = [limit, offset];
+        } else {
+            query = `
+                SELECT i.*, 
+                       c.business_name, c.contact_person,
+                       COALESCE(
+                           (SELECT SUM(amount) FROM credit_notes WHERE invoice_id = i.invoice_id),
+                           0
+                       ) as total_credits,
+                       (i.total_amount - COALESCE(
+                           (SELECT SUM(amount) FROM credit_notes WHERE invoice_id = i.invoice_id),
+                           0
+                       )) as outstanding_amount
+                FROM invoices i
+                LEFT JOIN customers c ON i.customer_id = c.customer_id
+                ${whereClause}
+                ORDER BY i.created_at DESC
+                LIMIT $${paramCount} OFFSET $${paramCount + 1}
+            `;
+            params.push(limit, offset);
+        }
 
         const result = await db.query(query, params);
 
@@ -584,34 +715,64 @@ export const getAllInvoices = async (req, res) => {
     }
 };
 
-export const downloadInvoicePdf = async (req, res) => {
+const downloadInvoicePdf = async (req, res) => {
   const { id } = req.params;
-  const { distributor_id } = req.user;
+  const { role, distributor_id } = req.user;
   try {
     // Fetch invoice details
-    const query = `
-      SELECT i.*, c.business_name, c.contact_person, c.phone, c.email, c.gstin,
-             c.address_line1, c.address_line2, c.city, c.state, c.postal_code,
-             json_agg(
-               json_build_object(
-                 'invoice_item_id', ii.invoice_item_id,
-                 'cylinder_type_id', ii.cylinder_type_id,
-                 'quantity', ii.quantity,
-                 'unit_price', ii.unit_price,
-                 'discount_per_unit', ii.discount_per_unit,
-                 'total_price', ii.total_price,
-                 'cylinder_type_name', ct.name
-               )
-             ) as items
-      FROM invoices i
-      LEFT JOIN customers c ON i.customer_id = c.customer_id
-      LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
-      LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
-      WHERE i.invoice_id = $1 AND i.distributor_id = $2
-      GROUP BY i.invoice_id, c.business_name, c.contact_person, c.phone, c.email, c.gstin,
-               c.address_line1, c.address_line2, c.city, c.state, c.postal_code
-    `;
-    const result = await db.query(query, [id, distributor_id]);
+    let query, params;
+    
+    if (role === 'super_admin') {
+      query = `
+        SELECT i.*, c.business_name, c.contact_person, c.phone, c.email, c.gstin,
+               c.address_line1, c.address_line2, c.city, c.state, c.postal_code,
+               json_agg(
+                 json_build_object(
+                   'invoice_item_id', ii.invoice_item_id,
+                   'cylinder_type_id', ii.cylinder_type_id,
+                   'quantity', ii.quantity,
+                   'unit_price', ii.unit_price,
+                   'discount_per_unit', ii.discount_per_unit,
+                   'total_price', ii.total_price,
+                   'cylinder_type_name', ct.name
+                 )
+               ) as items
+        FROM invoices i
+        LEFT JOIN customers c ON i.customer_id = c.customer_id
+        LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
+        LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
+        WHERE i.invoice_id = $1 AND i.deleted_at IS NULL
+        GROUP BY i.invoice_id, c.business_name, c.contact_person, c.phone, c.email, c.gstin,
+                 c.address_line1, c.address_line2, c.city, c.state, c.postal_code
+      `;
+      params = [id];
+    } else {
+      query = `
+        SELECT i.*, c.business_name, c.contact_person, c.phone, c.email, c.gstin,
+               c.address_line1, c.address_line2, c.city, c.state, c.postal_code,
+               json_agg(
+                 json_build_object(
+                   'invoice_item_id', ii.invoice_item_id,
+                   'cylinder_type_id', ii.cylinder_type_id,
+                   'quantity', ii.quantity,
+                   'unit_price', ii.unit_price,
+                   'discount_per_unit', ii.discount_per_unit,
+                   'total_price', ii.total_price,
+                   'cylinder_type_name', ct.name
+                 )
+               ) as items
+        FROM invoices i
+        LEFT JOIN customers c ON i.customer_id = c.customer_id
+        LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
+        LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
+        WHERE i.invoice_id = $1 AND i.distributor_id = $2 AND i.deleted_at IS NULL
+        GROUP BY i.invoice_id, c.business_name, c.contact_person, c.phone, c.email, c.gstin,
+                 c.address_line1, c.address_line2, c.city, c.state, c.postal_code
+      `;
+      params = [id, distributor_id];
+    }
+    
+    const result = await db.query(query, params);
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
@@ -758,4 +919,135 @@ export const downloadInvoicePdf = async (req, res) => {
       res.status(500).json({ error: 'Failed to generate invoice PDF' });
     }
   }
+};
+
+const getInvoiceByOrderId = async (req, res) => {
+  const { order_id } = req.params;
+  try {
+    const query = `
+      SELECT i.*, 
+             json_agg(
+               json_build_object(
+                 'invoice_item_id', ii.invoice_item_id,
+                 'cylinder_type_id', ii.cylinder_type_id,
+                 'quantity', ii.quantity,
+                 'unit_price', ii.unit_price,
+                 'discount_per_unit', ii.discount_per_unit,
+                 'total_price', ii.total_price,
+                 'cylinder_type_name', ct.name
+               )
+             ) as items
+      FROM invoices i
+      LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
+      LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
+      WHERE i.order_id = $1 AND i.deleted_at IS NULL
+      GROUP BY i.invoice_id
+    `;
+    const result = await db.query(query, [order_id]);
+    if (!result.rows.length) {
+      return res.status(404).json({ error: 'Invoice not found for this order' });
+    }
+    const invoice = result.rows[0];
+    if (!invoice.items || !Array.isArray(invoice.items) || (invoice.items.length === 1 && invoice.items[0] === null)) {
+      invoice.items = [];
+    }
+    res.json({ invoice });
+  } catch (error) {
+    console.error('Error fetching invoice by order_id:', error);
+    res.status(500).json({ error: 'Failed to fetch invoice', details: error.message });
+  }
+};
+
+// Fetch invoice by invoice_id
+const getInvoiceById = async (req, res) => {
+  const { invoice_id } = req.params;
+  try {
+    const query = `
+      SELECT i.*, 
+             json_agg(
+               json_build_object(
+                 'invoice_item_id', ii.invoice_item_id,
+                 'cylinder_type_id', ii.cylinder_type_id,
+                 'quantity', ii.quantity,
+                 'unit_price', ii.unit_price,
+                 'discount_per_unit', ii.discount_per_unit,
+                 'total_price', ii.total_price,
+                 'cylinder_type_name', ct.name
+               )
+             ) as items
+      FROM invoices i
+      LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
+      LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
+      WHERE i.invoice_id = $1 AND i.deleted_at IS NULL
+      GROUP BY i.invoice_id
+    `;
+    const result = await db.query(query, [invoice_id]);
+    if (!result.rows.length) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    const invoice = result.rows[0];
+    if (!invoice.items || !Array.isArray(invoice.items) || (invoice.items.length === 1 && invoice.items[0] === null)) {
+      invoice.items = [];
+    }
+    res.json({ invoice });
+  } catch (error) {
+    console.error('Error fetching invoice by invoice_id:', error);
+    res.status(500).json({ error: 'Failed to fetch invoice', details: error.message });
+  }
+};
+
+// Batch check invoices for multiple order_ids
+const checkMultipleInvoices = async (req, res) => {
+  const { order_ids } = req.body;
+  const { role, distributor_id } = req.user;
+
+  if (!Array.isArray(order_ids) || order_ids.length === 0) {
+    return res.status(400).json({ error: 'order_ids must be a non-empty array' });
+  }
+
+  try {
+    let query, params;
+    if (role === 'super_admin') {
+      query = `
+        SELECT order_id, invoice_id, status
+        FROM invoices
+        WHERE order_id = ANY($1) AND deleted_at IS NULL
+      `;
+      params = [order_ids];
+    } else {
+      query = `
+        SELECT order_id, invoice_id, status
+        FROM invoices
+        WHERE order_id = ANY($1) AND distributor_id = $2 AND deleted_at IS NULL
+      `;
+      params = [order_ids, distributor_id];
+    }
+    const result = await db.query(query, params);
+    // Map order_id to invoice info
+    const map = {};
+    for (const oid of order_ids) {
+      map[oid] = null;
+    }
+    for (const row of result.rows) {
+      map[row.order_id] = { invoice_id: row.invoice_id, status: row.status };
+    }
+    res.json(map);
+  } catch (error) {
+    console.error('Error in checkMultipleInvoices:', error);
+    res.status(500).json({ error: 'Failed to check invoices', details: error.message });
+  }
+};
+
+module.exports = {
+  createInvoiceFromOrder,
+  getInvoice,
+  raiseDispute,
+  issueCreditNote,
+  cancelInvoice,
+  updateInvoiceStatuses,
+  getAllInvoices,
+  downloadInvoicePdf,
+  getInvoiceByOrderId,
+  getInvoiceById,
+  checkMultipleInvoices
 }; 

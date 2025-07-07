@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../services/apiClient';
+import { useAuth } from '../contexts/AuthContext';
 
 export const InventoryPage: React.FC = () => {
+  const { distributor_id, isSuperAdmin } = useAuth();
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [summary, setSummary] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -14,21 +16,22 @@ export const InventoryPage: React.FC = () => {
   const [isAdmin, setIsAdmin] = useState(false); // TODO: Get from auth context
 
   useEffect(() => {
-    fetchSummary();
-    // eslint-disable-next-line
-  }, [date]);
+    if (!isSuperAdmin && !distributor_id) return;
+    fetchInventory();
+  }, [date, distributor_id, isSuperAdmin]);
 
-  const fetchSummary = async () => {
-    setLoading(true);
-    setError(null);
+  const fetchInventory = async () => {
     try {
-      const res = await api.inventory.getSummaryByDate(date);
-      setSummary(res.data);
+      setLoading(true);
+      setError(null);
+      // Always fetch by date
+      const response = await api.inventory.getSummaryByDate(date);
+      setSummary(response.data);
       setEditRows({});
-      // Check if any row is locked
-      setIsLocked(res.data.some((row: any) => row.status === 'locked'));
-    } catch (err: any) {
-      setError('Failed to fetch inventory summary');
+      setIsLocked(response.data.some((row: any) => row.status === 'locked'));
+    } catch (error) {
+      console.error('Error fetching inventory:', error);
+      setError('Error fetching inventory');
     } finally {
       setLoading(false);
     }
@@ -100,7 +103,7 @@ export const InventoryPage: React.FC = () => {
       }));
       await api.inventory.upsertSummaryByDate(date, updates);
       setSuccess('Submitted for approval!');
-      fetchSummary();
+      fetchInventory();
     } catch (err: any) {
       setError('Failed to submit updates');
     } finally {
@@ -121,7 +124,7 @@ export const InventoryPage: React.FC = () => {
       await api.inventory.upsertSummaryByDate(date, [{ cylinder_type_id, lost }]);
       setSuccess('Submitted for approval!');
       setPendingLost((prev) => ({ ...prev, [cylinder_type_id]: false }));
-      fetchSummary();
+      fetchInventory();
     } catch (err: any) {
       setError('Failed to submit lost value');
     } finally {
@@ -247,7 +250,7 @@ export const InventoryPage: React.FC = () => {
                       disabled={isLocked && !isAdmin}
                     />
                   </td>
-                  <td className="px-2 py-2 border text-center text-teal-900 font-bold">{calcClosingFulls(row)}</td>
+                  <td className="px-2 py-2 border text-center text-teal-900 font-bold">{row.closing_fulls}</td>
                   <td className="px-2 py-2 border text-center text-teal-900 font-bold">{calcClosingEmpties(row)}</td>
                   <td className="px-2 py-2 border text-center">
                     {editRows[row.cylinder_type_id]?.lost !== undefined && !row.lost_pending && !isLocked ? (

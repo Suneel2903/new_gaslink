@@ -1,6 +1,6 @@
-import pool from './db.js';
-import fs from 'fs';
-import path from 'path';
+const pool = require('./db.js');
+const fs = require('fs');
+const path = require('path');
 
 async function insertTestData() {
   try {

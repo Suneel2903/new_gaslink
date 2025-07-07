@@ -14,6 +14,7 @@ import LandingPage from '../pages/LandingPage';
 import CylinderPricesPage from '../pages/Admin/CylinderPricesPage';
 import CustomerInventoryPage from '../pages/Admin/CustomerInventoryPage';
 import PaymentsPage from '../pages/PaymentsPage';
+import CorporationInvoicesPage from '../pages/CorporationInvoicesPage';
 
 const AppRoutes = () => (
   <Router>
@@ -31,6 +32,7 @@ const AppRoutes = () => (
         <Route path="payments" element={<PaymentsPage />} />
         <Route path="admin/cylinder-prices" element={<CylinderPricesPage />} />
         <Route path="admin/customer-inventory" element={<CustomerInventoryPage />} />
+        <Route path="corporation-invoices" element={<CorporationInvoicesPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

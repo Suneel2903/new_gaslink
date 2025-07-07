@@ -1,11 +1,8 @@
-import { Pool } from 'pg';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+const { Pool } = require('pg');
+const fs = require('fs');
+const path = require('path');
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
+// Use __dirname directly in CommonJS
 // Database connection for setup (without database name)
 const setupPool = new Pool({
   host: process.env.DB_HOST || 'localhost',

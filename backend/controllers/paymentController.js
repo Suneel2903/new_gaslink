@@ -1,4 +1,5 @@
-import db from '../db.js';
+const db = require('../db.js');
+const { getEffectiveUserId } = require('../utils/authUtils');
 
 // Get all payments with customer and distributor details
 const getAllPayments = async (req, res) => {
@@ -8,7 +9,7 @@ const getAllPayments = async (req, res) => {
                 pt.*,
                 c.business_name AS customer_name,
                 c.phone,
-                u.username as received_by_name
+                COALESCE(u.first_name || ' ' || u.last_name, 'Admin') as received_by_name
             FROM payment_transactions pt
             LEFT JOIN customers c ON pt.customer_id = c.customer_id
             LEFT JOIN users u ON pt.received_by = u.user_id
@@ -34,7 +35,7 @@ const getPaymentById = async (req, res) => {
                 pt.*,
                 c.business_name AS customer_name,
                 c.phone,
-                u.username as received_by_name
+                COALESCE(u.first_name || ' ' || u.last_name, 'Admin') as received_by_name
             FROM payment_transactions pt
             LEFT JOIN customers c ON pt.customer_id = c.customer_id
             LEFT JOIN users u ON pt.received_by = u.user_id
@@ -110,7 +111,7 @@ const createPayment = async (req, res) => {
             payment_method,
             payment_reference,
             allocation_mode,
-            null, // Set to null for testing - no user authentication
+            null, // Set to null for admin-only testing
             notes
         ]);
         
@@ -152,7 +153,7 @@ const performAutoAllocation = async (client, paymentId, customerId, totalAmount)
             ) as allocated_amount
         FROM invoices i
         WHERE i.customer_id = $1 
-        AND i.status IN ('pending', 'partial')
+        AND i.status IN ('issued', 'paid')
         ORDER BY i.created_at ASC
     `;
     
@@ -238,13 +239,13 @@ const updateInvoiceStatuses = async (client, customerId) => {
                 (SELECT SUM(allocated_amount) 
                  FROM payment_allocations 
                  WHERE invoice_id = invoices.invoice_id), 0
-            ) THEN 'paid'
+            ) THEN 'paid'::invoice_status
             WHEN COALESCE(
                 (SELECT SUM(allocated_amount) 
                  FROM payment_allocations 
                  WHERE invoice_id = invoices.invoice_id), 0
-            ) > 0 THEN 'partial'
-            ELSE 'pending'
+            ) > 0 THEN 'issued'::invoice_status
+            ELSE 'issued'::invoice_status
         END
         WHERE customer_id = $1
     `;
@@ -259,7 +260,7 @@ const getPaymentWithAllocations = async (client, paymentId) => {
             pt.*,
             c.business_name AS customer_name,
             c.phone,
-            u.username as received_by_name
+            COALESCE(u.first_name || ' ' || u.last_name, 'Admin') as received_by_name
         FROM payment_transactions pt
         LEFT JOIN customers c ON pt.customer_id = c.customer_id
         LEFT JOIN users u ON pt.received_by = u.user_id
@@ -306,7 +307,7 @@ const getOutstandingInvoices = async (req, res) => {
                 )) as outstanding_amount
             FROM invoices i
             WHERE i.customer_id = $1 
-            AND i.status IN ('pending', 'partial')
+            AND i.status IN ('issued', 'paid')
             ORDER BY i.created_at ASC
         `;
         
@@ -371,10 +372,67 @@ const getPaymentSummary = async (req, res) => {
     }
 };
 
-export {
+// Update a payment (basic implementation)
+const updatePayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, payment_method, payment_reference, notes } = req.body;
+    const fields = [];
+    const values = [];
+    let idx = 1;
+    if (amount !== undefined) { fields.push(`amount = $${idx++}`); values.push(amount); }
+    if (payment_method !== undefined) { fields.push(`payment_method = $${idx++}`); values.push(payment_method); }
+    if (payment_reference !== undefined) { fields.push(`payment_reference = $${idx++}`); values.push(payment_reference); }
+    if (notes !== undefined) { fields.push(`notes = $${idx++}`); values.push(notes); }
+    if (fields.length === 0) return res.status(400).json({ error: 'No fields to update' });
+    values.push(id);
+    const query = `UPDATE payment_transactions SET ${fields.join(', ')}, updated_at = NOW() WHERE payment_id = $${idx} RETURNING *`;
+    const { rows } = await db.query(query, values);
+    if (rows.length === 0) return res.status(404).json({ error: 'Payment not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update payment', details: err.message });
+  }
+};
+
+// Delete a payment (hard delete)
+const deletePayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.query(
+      'DELETE FROM payment_transactions WHERE payment_id = $1 RETURNING *',
+      [id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Payment not found' });
+    res.json({ message: 'Payment deleted', payment: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete payment', details: err.message });
+  }
+};
+
+// Get all payments for a customer
+const getCustomerPayments = async (req, res) => {
+  try {
+    const { customer_id } = req.params;
+    const result = await db.query(
+      `SELECT * FROM payment_transactions WHERE customer_id = $1 ORDER BY created_at DESC`,
+      [customer_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch customer payments', details: err.message });
+  }
+};
+
+const getPayment = getPaymentById;
+
+module.exports = {
     getAllPayments,
-    getPaymentById,
+    getPayment,
     createPayment,
+    updatePayment,
+    deletePayment,
+    getCustomerPayments,
     getOutstandingInvoices,
     getPaymentSummary
 }; 

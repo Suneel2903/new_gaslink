@@ -13,6 +13,8 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   role: string | null;
+  distributor_id: string | null;
+  isSuperAdmin: boolean;
   login: (email: string, password: string) => Promise<UserCredential>;
   logout: () => Promise<void>;
   clearUser: () => void;
@@ -28,32 +30,40 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<string | null>(null);
+  const [distributorId, setDistributorId] = useState<string | null>(null);
+  const [profileLoaded, setProfileLoaded] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setUser(user);
       setLoading(false);
-      
-      if (user) {
+      if (user && !profileLoaded) {
         // Get and store the user's ID token
         user.getIdToken().then((token) => {
           localStorage.setItem('authToken', token);
         });
-        // Fetch user profile from backend to get role
+        // Fetch user profile from backend to get role and distributor_id
         try {
           const res = await api.users.getProfile();
+          console.log("Profile fetch response:", res.data);
           setRole(res.data.role || null);
-        } catch {
+          setDistributorId(res.data.distributor_id || null);
+          setProfileLoaded(true);
+        } catch (err) {
+          console.error('Failed to fetch user profile:', err);
           setRole(null);
+          setDistributorId(null);
+          setProfileLoaded(false);
         }
-      } else {
+      } else if (!user) {
         localStorage.removeItem('authToken');
         setRole(null);
+        setDistributorId(null);
+        setProfileLoaded(false);
       }
     });
-
     return () => unsubscribe();
-  }, []);
+  }, [profileLoaded]);
 
   const login = async (email: string, password: string) => {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
@@ -63,8 +73,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       const res = await api.users.getProfile();
       setRole(res.data.role || null);
+      setDistributorId(res.data.distributor_id || null);
     } catch {
       setRole(null);
+      setDistributorId(null);
     }
     return userCredential;
   };
@@ -79,10 +91,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     localStorage.removeItem('authToken');
   };
 
+  const isSuperAdmin = role === 'super_admin';
+
   const value = {
     user,
     loading,
     role,
+    distributor_id: distributorId,
+    isSuperAdmin,
     login,
     logout,
     clearUser,

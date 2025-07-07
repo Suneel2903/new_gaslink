@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../services/apiClient';
 import invoiceService from '../services/invoiceService';
-import type { InvoiceGenerationCheck } from '../services/invoiceService';
+import { useAuth } from '../contexts/AuthContext';
+import { fetchInvoiceByOrderId } from '../services/invoiceService';
+import { toast } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 
 interface Order {
   order_id: string;
@@ -44,6 +47,7 @@ const initialOrderForm = {
 };
 
 export const OrdersPage: React.FC = () => {
+  const { distributor_id, isSuperAdmin } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -66,26 +70,39 @@ export const OrdersPage: React.FC = () => {
   const [drawerOrder, setDrawerOrder] = useState<Order | null>(null);
   
   // Invoice generation state
-  const [invoiceChecks, setInvoiceChecks] = useState<Record<string, InvoiceGenerationCheck>>({});
-  const [invoiceLoading, setInvoiceLoading] = useState<Record<string, boolean>>({});
+  const [invoiceChecks, setInvoiceChecks] = useState<Record<string, { invoice_id: string; status: string } | null>>({});
 
-  const fetchOrders = async () => {
+  const fetchOrdersAndInvoices = async () => {
     setLoading(true);
-    setError('');
     try {
-      const res = await api.orders.getAll();
-      console.log("✅ Orders fetched:", res.data);
-      setOrders(res.data);
-    } catch (err: any) {
-      setError('Failed to load orders');
+      let response;
+      if (isSuperAdmin) {
+        response = await api.orders.getAll();
+      } else {
+        response = await api.orders.getAll(distributor_id);
+      }
+      setOrders(response.data);
+      // After orders are fetched, batch check invoices for delivered orders
+      const deliveredOrderIds = (response.data || [])
+        .filter((order: Order) => isDeliveredStatus(getOrderStatus(order)))
+        .map((order: Order) => order.order_id);
+      if (deliveredOrderIds.length > 0) {
+        const checks = await invoiceService.checkMultipleInvoices(deliveredOrderIds);
+        setInvoiceChecks(checks);
+      } else {
+        setInvoiceChecks({});
+      }
+    } catch (error) {
+      console.error('Error fetching orders or checking invoices:', error);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchOrders();
-  }, []);
+    if (!isSuperAdmin && !distributor_id) return;
+    fetchOrdersAndInvoices();
+  }, [distributor_id, isSuperAdmin]);
 
   useEffect(() => {
     setCylinderTypesLoading(true);
@@ -186,7 +203,7 @@ export const OrdersPage: React.FC = () => {
             empties_collected: empties_collected[item.cylinder_type_id],
           }))
       });
-      await fetchOrders();
+      await fetchOrdersAndInvoices();
       setShowDeliveryModal(false);
       setDeliveryModalOrder(null);
     } catch (err) {
@@ -201,7 +218,7 @@ export const OrdersPage: React.FC = () => {
     setUpdatingId(order_id);
     try {
       await api.orders.changeStatus(order_id, 'cancelled');
-      await fetchOrders();
+      await fetchOrdersAndInvoices();
     } catch (err) {
       alert('Failed to cancel order');
     } finally {
@@ -267,7 +284,7 @@ export const OrdersPage: React.FC = () => {
         });
         setFormSuccess('Order updated successfully!');
       }
-      await fetchOrders();
+      await fetchOrdersAndInvoices();
       closeModal(); // Close modal immediately on success
     } catch (err) {
       setFormError('Failed to save order');
@@ -309,31 +326,29 @@ export const OrdersPage: React.FC = () => {
 
   const isDeliveredStatus = (status: string) => status === 'delivered' || status === 'modified delivered';
 
-  // Check if invoice can be generated for an order
-  const checkInvoiceGeneration = async (orderId: string) => {
-    try {
-      setInvoiceLoading(prev => ({ ...prev, [orderId]: true }));
-      const check = await invoiceService.checkInvoiceGeneration(orderId);
-      setInvoiceChecks(prev => ({ ...prev, [orderId]: check }));
-    } catch (err) {
-      console.error('Error checking invoice generation:', err);
-    } finally {
-      setInvoiceLoading(prev => ({ ...prev, [orderId]: false }));
-    }
-  };
-
   // Generate invoice for an order
   const handleGenerateInvoice = async (orderId: string) => {
     try {
-      setInvoiceLoading(prev => ({ ...prev, [orderId]: true }));
       await invoiceService.createFromOrder(orderId);
-      // Refresh the invoice check
-      await checkInvoiceGeneration(orderId);
       alert('Invoice generated successfully!');
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to generate invoice');
-    } finally {
-      setInvoiceLoading(prev => ({ ...prev, [orderId]: false }));
+    }
+  };
+
+  // Update handleViewInvoice to use new logic and toasts
+  const handleViewInvoice = async (order_id: string) => {
+    try {
+      const invoiceData = await fetchInvoiceByOrderId(order_id);
+      // TODO: open modal, viewer, or navigate with invoiceData
+      console.log('Fetched invoice:', invoiceData);
+    } catch (err: any) {
+      if (err.response?.status === 404) {
+        toast.error('❌ Invoice not available for this order');
+      } else {
+        toast.error('⚠️ Failed to fetch invoice');
+        console.error('Fetch invoice error:', err);
+      }
     }
   };
 
@@ -442,28 +457,15 @@ export const OrdersPage: React.FC = () => {
                             {/* Invoice Generation Button */}
                             {(() => {
                               const check = invoiceChecks[order.order_id];
-                              const isLoading = invoiceLoading[order.order_id];
-                              
-                              if (isLoading) {
-                                return (
-                                  <button
-                                    className="bg-blue-100 text-blue-700 px-3 py-1 rounded text-xs font-semibold h-8 flex items-center justify-center min-w-[70px] opacity-50 cursor-not-allowed"
-                                    disabled
-                                  >
-                                    Checking...
-                                  </button>
-                                );
-                              }
                               
                               if (!check) {
-                                // Check on first render for delivered orders
-                                checkInvoiceGeneration(order.order_id);
                                 return (
                                   <button
-                                    className="bg-blue-100 text-blue-700 px-3 py-1 rounded text-xs font-semibold h-8 flex items-center justify-center min-w-[70px] opacity-50 cursor-not-allowed"
+                                    className="bg-gray-100 text-gray-500 px-3 py-1 rounded text-xs font-semibold h-8 flex items-center justify-center min-w-[70px] opacity-50 cursor-not-allowed"
                                     disabled
+                                    title="Invoice not generated"
                                   >
-                                    Loading...
+                                    Invoice
                                   </button>
                                 );
                               }
@@ -473,9 +475,8 @@ export const OrdersPage: React.FC = () => {
                                   <button
                                     className="bg-blue-100 text-blue-700 px-3 py-1 rounded text-xs font-semibold hover:bg-blue-200 h-8 flex items-center justify-center min-w-[70px]"
                                     onClick={() => handleGenerateInvoice(order.order_id)}
-                                    disabled={invoiceLoading[order.order_id]}
                                   >
-                                    {invoiceLoading[order.order_id] ? 'Generating...' : 'Invoice'}
+                                    Invoice
                                   </button>
                                 );
                               }

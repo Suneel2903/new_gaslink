@@ -1,30 +1,54 @@
-import pool from '../db.js';
+const pool = require('../db.js');
+const { getEffectiveUserId } = require('../utils/authUtils');
 
 // GET /inventory/summary/:date
-export const getInventorySummary = async (req, res) => {
+const getInventorySummary = async (req, res) => {
   try {
-    // const { distributor_id } = req.user; // TODO: Add auth-based filtering later
+    const { role, distributor_id } = req.user;
     const { date } = req.params;
+    let targetDistributorId = distributor_id;
+    // For super_admin, allow filtering by query param, or return all if not provided
+    if (role === 'super_admin' && req.query.distributor_id) {
+      targetDistributorId = req.query.distributor_id;
+    }
     // Get all cylinder types with names
     const cylinderTypesResult = await pool.query(
       `SELECT cylinder_type_id, name FROM cylinder_types WHERE is_active = TRUE AND deleted_at IS NULL`
     );
     const cylinderTypes = cylinderTypesResult.rows;
-    // Fetch or initialize summary for each cylinder type
     const summaries = [];
     for (const cylinderType of cylinderTypes) {
-      // Try to fetch summary for this date/type (ignore distributor for now)
-      const { rows } = await pool.query(
-        `SELECT * FROM inventory_daily_summary WHERE date = $1 AND cylinder_type_id = $2`,
-        [date, cylinderType.cylinder_type_id]
-      );
+      let rows;
+      if (role === 'super_admin' && !targetDistributorId) {
+        // Return all summaries for this date/type (all distributors)
+        const result = await pool.query(
+          `SELECT * FROM inventory_daily_summary WHERE date = $1 AND cylinder_type_id = $2`,
+          [date, cylinderType.cylinder_type_id]
+        );
+        rows = result.rows;
+      } else {
+        // Filter by distributor_id
+        const result = await pool.query(
+          `SELECT * FROM inventory_daily_summary WHERE date = $1 AND cylinder_type_id = $2 AND distributor_id = $3`,
+          [date, cylinderType.cylinder_type_id, targetDistributorId]
+        );
+        rows = result.rows;
+      }
       let summary = rows[0];
       if (!summary) {
         // Get previous day's closing as today's opening
-        const prev = await pool.query(
-          `SELECT closing_fulls, closing_empties FROM inventory_daily_summary WHERE date < $1 AND cylinder_type_id = $2 ORDER BY date DESC LIMIT 1`,
-          [date, cylinderType.cylinder_type_id]
-        );
+        let prev;
+        if (role === 'super_admin' && !targetDistributorId) {
+          prev = await pool.query(
+            `SELECT closing_fulls, closing_empties FROM inventory_daily_summary WHERE date < $1 AND cylinder_type_id = $2 ORDER BY date DESC LIMIT 1`,
+            [date, cylinderType.cylinder_type_id]
+          );
+        } else {
+          prev = await pool.query(
+            `SELECT closing_fulls, closing_empties FROM inventory_daily_summary WHERE date < $1 AND cylinder_type_id = $2 AND distributor_id = $3 ORDER BY date DESC LIMIT 1`,
+            [date, cylinderType.cylinder_type_id, targetDistributorId]
+          );
+        }
         summary = {
           id: null,
           date,
@@ -44,19 +68,32 @@ export const getInventorySummary = async (req, res) => {
           created_at: null
         };
       } else {
-        // Add cylinder name to existing summary
         summary.cylinder_name = cylinderType.name;
       }
       // Calculate soft_blocked_qty from orders
-      const softBlockResult = await pool.query(
-        `SELECT COALESCE(SUM(oi.quantity),0) AS soft_blocked_qty
-         FROM orders o
-         JOIN order_items oi ON o.order_id = oi.order_id
-         WHERE o.status IN ('pending','processing')
-           AND o.delivery_date = $1
-           AND oi.cylinder_type_id = $2`,
-        [date, cylinderType.cylinder_type_id]
-      );
+      let softBlockResult;
+      if (role === 'super_admin' && !targetDistributorId) {
+        softBlockResult = await pool.query(
+          `SELECT COALESCE(SUM(oi.quantity),0) AS soft_blocked_qty
+           FROM orders o
+           JOIN order_items oi ON o.order_id = oi.order_id
+           WHERE o.status IN ('pending','processing')
+             AND o.delivery_date = $1
+             AND oi.cylinder_type_id = $2`,
+          [date, cylinderType.cylinder_type_id]
+        );
+      } else {
+        softBlockResult = await pool.query(
+          `SELECT COALESCE(SUM(oi.quantity),0) AS soft_blocked_qty
+           FROM orders o
+           JOIN order_items oi ON o.order_id = oi.order_id
+           WHERE o.status IN ('pending','processing')
+             AND o.delivery_date = $1
+             AND oi.cylinder_type_id = $2
+             AND o.distributor_id = $3`,
+          [date, cylinderType.cylinder_type_id, targetDistributorId]
+        );
+      }
       summary.soft_blocked_qty = Number(softBlockResult.rows[0].soft_blocked_qty);
       summaries.push(summary);
     }
@@ -68,7 +105,7 @@ export const getInventorySummary = async (req, res) => {
 };
 
 // POST /inventory/summary/:date
-export const upsertInventorySummary = async (req, res) => {
+const upsertInventorySummary = async (req, res) => {
   try {
     // const { distributor_id } = req.user; // TODO: Add auth-based filtering later
     const { date } = req.params;
@@ -115,7 +152,7 @@ export const upsertInventorySummary = async (req, res) => {
 };
 
 // PATCH /inventory/approve-adjustment
-export const approveInventoryAdjustment = async (req, res) => {
+const approveInventoryAdjustment = async (req, res) => {
   try {
     const { adjustment_ids, admin_id } = req.body; // [UUID]
     if (!Array.isArray(adjustment_ids) || !admin_id) return res.status(400).json({ error: 'Invalid input' });
@@ -145,7 +182,7 @@ export const approveInventoryAdjustment = async (req, res) => {
 };
 
 // POST /inventory/update-from-delivery
-export const updateFromDelivery = async (req, res) => {
+const updateFromDelivery = async (req, res) => {
   const client = await pool.connect();
   try {
     const { distributor_id, date, deliveries } = req.body; // deliveries: [{order_id, order_item_id, customer_id, cylinder_type_id, delivered_qty, empties_collected}]
@@ -259,7 +296,7 @@ export const updateFromDelivery = async (req, res) => {
 };
 
 // GET /inventory/replenishments?status=pending
-export const listReplenishments = async (req, res) => {
+const listReplenishments = async (req, res) => {
   try {
     // const { distributor_id } = req.user; // TODO: Add auth-based filtering later
     const { status } = req.query;
@@ -283,7 +320,7 @@ export const listReplenishments = async (req, res) => {
 };
 
 // PATCH /inventory/replenishments/:id
-export const updateReplenishmentStatus = async (req, res) => {
+const updateReplenishmentStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, admin_id, review_notes } = req.body;
@@ -312,7 +349,7 @@ export const updateReplenishmentStatus = async (req, res) => {
 };
 
 // GET /inventory/adjustments?status=pending
-export const listPendingAdjustments = async (req, res) => {
+const listPendingAdjustments = async (req, res) => {
   try {
     // const { distributor_id } = req.user; // TODO: Add auth-based filtering later
     const { status } = req.query;
@@ -336,11 +373,11 @@ export const listPendingAdjustments = async (req, res) => {
 };
 
 // POST /inventory/confirm-return
-export const confirmReturn = async (req, res) => {
+const confirmReturn = async (req, res) => {
   const client = await pool.connect();
   try {
     const { returns } = req.body; // [{order_id, order_item_id, customer_id, cylinder_type_id, confirmed_return_qty}]
-    const user_id = req.user?.user_id;
+    const userId = getEffectiveUserId(req.user);
     if (!Array.isArray(returns) || returns.length === 0) return res.status(400).json({ error: 'Invalid input' });
     await client.query('BEGIN');
     for (const r of returns) {
@@ -393,7 +430,7 @@ export const confirmReturn = async (req, res) => {
 };
 
 // GET /inventory/customer-summary/:customer_id
-export const getCustomerInventorySummary = async (req, res) => {
+const getCustomerInventorySummary = async (req, res) => {
   try {
     const { customer_id } = req.params;
     if (!customer_id) return res.status(400).json({ error: 'Missing customer_id' });
@@ -414,7 +451,7 @@ export const getCustomerInventorySummary = async (req, res) => {
 };
 
 // GET /inventory/unaccounted-summary?date=YYYY-MM-DD
-export const getUnaccountedSummary = async (req, res) => {
+const getUnaccountedSummary = async (req, res) => {
   try {
     const { date } = req.query;
     if (!date) return res.status(400).json({ error: 'Missing date' });
@@ -436,12 +473,14 @@ export const getUnaccountedSummary = async (req, res) => {
 };
 
 // PATCH /inventory/lock-summary/:date
-export const lockSummary = async (req, res) => {
+const lockSummary = async (req, res) => {
   const client = await pool.connect();
   try {
     const { date } = req.params;
-    const user_id = req.user?.user_id;
-    if (!req.user?.is_admin) return res.status(403).json({ error: 'Admin only' });
+    const userId = getEffectiveUserId(req.user);
+    if (!req.user || (!req.user.user_id && !req.user.uid && !req.user.firebase_uid)) {
+      return res.status(403).json({ error: 'Admin only' });
+    }
     await client.query('BEGIN');
     // Only lock if not already locked
     const { rowCount } = await client.query(
@@ -469,12 +508,14 @@ export const lockSummary = async (req, res) => {
 };
 
 // PATCH /inventory/unlock-summary/:date
-export const unlockSummary = async (req, res) => {
+const unlockSummary = async (req, res) => {
   const client = await pool.connect();
   try {
     const { date } = req.params;
-    const user_id = req.user?.user_id;
-    if (!req.user?.is_admin) return res.status(403).json({ error: 'Admin only' });
+    const userId = getEffectiveUserId(req.user);
+    if (!req.user || (!req.user.user_id && !req.user.uid && !req.user.firebase_uid)) {
+      return res.status(403).json({ error: 'Admin only' });
+    }
     await client.query('BEGIN');
     // Only unlock if currently locked
     const { rowCount } = await client.query(
@@ -502,11 +543,11 @@ export const unlockSummary = async (req, res) => {
 };
 
 // PATCH /inventory/admin-override-balance
-export const adminOverrideBalance = async (req, res) => {
+const adminOverrideBalance = async (req, res) => {
   const client = await pool.connect();
   try {
     const { customer_id, cylinder_type_id, with_customer_qty, pending_returns, missing_qty, reason } = req.body;
-    const user_id = req.user?.user_id;
+    const userId = getEffectiveUserId(req.user);
     if (!customer_id || !cylinder_type_id || !reason) {
       console.error('Override failed: missing required fields', req.body);
       return res.status(400).json({ error: 'Missing required fields' });
@@ -603,7 +644,7 @@ async function logInventoryAudit(client, { action, entity, entity_id, details, d
 }
 
 // GET /inventory/history/:customer_id/:cylinder_type_id
-export const getInventoryHistory = async (req, res) => {
+const getInventoryHistory = async (req, res) => {
   try {
     const { customer_id, cylinder_type_id } = req.params;
     if (!customer_id || !cylinder_type_id) return res.status(400).json({ error: 'Missing customer_id or cylinder_type_id' });
@@ -618,4 +659,22 @@ export const getInventoryHistory = async (req, res) => {
     console.error('getInventoryHistory error:', err);
     res.status(500).json({ error: 'Failed to fetch inventory history' });
   }
+};
+
+module.exports = {
+  getInventorySummary,
+  upsertInventorySummary,
+  approveInventoryAdjustment,
+  updateFromDelivery,
+  listReplenishments,
+  updateReplenishmentStatus,
+  listPendingAdjustments,
+  confirmReturn,
+  getCustomerInventorySummary,
+  getUnaccountedSummary,
+  lockSummary,
+  unlockSummary,
+  adminOverrideBalance,
+  getInventoryHistory,
+  logInventoryAudit
 }; 

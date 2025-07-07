@@ -1,6 +1,6 @@
-import dotenv from 'dotenv';
+const dotenv = require('dotenv');
 dotenv.config();
-import pkg from 'pg';
+const pkg = require('pg');
 const { Pool } = pkg;
 
 const pool = new Pool({
@@ -38,4 +38,4 @@ pool.on('error', (err) => {
   process.exit(-1);
 });
 
-export default pool; 
+module.exports = pool; 

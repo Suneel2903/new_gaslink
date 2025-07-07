@@ -1,25 +1,46 @@
-import express from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
-import dotenv from 'dotenv';
-import { errorHandler } from './middleware/errorHandler.js';
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const dotenv = require('dotenv');
+const { errorHandler } = require('./middleware/errorHandler.js');
+
+// Initialize Firebase Admin SDK
+const admin = require('firebase-admin');
+const serviceAccount = require('./firebase/serviceAccountKey.json');
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 // Import routes
-import userRoutes from './routes/users.js';
-import orderRoutes from './routes/orderRoutes.js';
-import customerRoutes from './routes/customers.js';
-import cylinderTypeRoutes from './routes/cylinderTypes.js';
-import cylinderPricesRoutes from './routes/cylinderPrices.js';
-import inventoryRoutes from './routes/inventory.js';
-import invoiceRoutes from './routes/invoices.js';
-import paymentRoutes from './routes/payments.js';
-import distributorRoutes from './routes/distributors.js';
+const userRoutes = require('./routes/users.js');
+const orderRoutes = require('./routes/orderRoutes.js');
+const customerRoutes = require('./routes/customers.js');
+const cylinderTypeRoutes = require('./routes/cylinderTypes.js');
+const cylinderPricesRoutes = require('./routes/cylinderPrices.js');
+const inventoryRoutes = require('./routes/inventory.js');
+const invoiceRoutes = require('./routes/invoices.js');
+const paymentRoutes = require('./routes/payments.js');
+const distributorRoutes = require('./routes/distributors.js');
+const ocrRoutes = require('./routes/ocrRoutes.js');
+const zohoOAuthRoutes = require('./zohoOAuth.js');
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// CORS configuration (should be at the top)
+app.use(cors({
+  origin: [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000'
+  ],
+  credentials: true
+}));
+app.options('*', cors());
 
 // Security middleware
 app.use(helmet());
@@ -31,19 +52,6 @@ const limiter = rateLimit({
   message: 'Too many requests from this IP, please try again later.'
 });
 app.use('/api/', limiter);
-
-// CORS configuration
-app.use(cors({
-  origin: process.env.NODE_ENV === 'production'
-    ? ['https://yourdomain.com']
-    : ['http://localhost:3000', 'http://localhost:5173'],
-  credentials: true
-}));
-
-// CORS preflight error logging
-app.options('*', cors(), (req, res) => {
-  res.sendStatus(200);
-});
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
@@ -69,6 +77,10 @@ app.use('/api/cylinder-prices', cylinderPricesRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/invoices', invoiceRoutes);
 app.use('/api/payments', paymentRoutes);
+app.use('/api/ocr', ocrRoutes);
+
+// Zoho OAuth Routes
+app.use('/zoho', zohoOAuthRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {
@@ -89,4 +101,4 @@ app.listen(PORT, () => {
   console.log(`🔗 API base: http://localhost:${PORT}/api`);
 });
 
-export default app; 
+module.exports = app; 

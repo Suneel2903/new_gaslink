@@ -1,25 +1,39 @@
-import express from 'express';
-import { createOrder, updateOrderStatus, listOrders, cancelOrder, checkInvoiceGeneration } from '../controllers/orderController.js';
-import authenticateUser from '../middleware/auth.js';
+const express = require('express');
+const { authenticateUser } = require('../middleware/auth.js');
+const { checkRole } = require('../middleware/checkRole.js');
+const {
+  createOrder,
+  getOrder,
+  getAllOrders,
+  updateOrder,
+  deleteOrder,
+  fulfillOrder,
+  getCustomerOrders,
+  updateOrderStatus
+} = require('../controllers/orderController.js');
 
 const router = express.Router();
 
-// Test route
-router.get('/ping', (req, res) => res.json({ message: 'Order API is live' }));
+router.use(authenticateUser);
 
-// Place order
-router.post('/', authenticateUser, createOrder);
+// Admin actions: super_admin, distributor_admin
+router.post('/', checkRole(['super_admin', 'distributor_admin', 'customer']), createOrder);
+router.put('/:id', checkRole(['super_admin', 'distributor_admin']), updateOrder);
+router.delete('/:id', checkRole(['super_admin', 'distributor_admin']), deleteOrder);
 
-// Update order status
-router.patch('/:id/status', authenticateUser, updateOrderStatus);
+// Fulfillment: inventory
+router.post('/:id/fulfill', checkRole(['super_admin', 'inventory', 'distributor_admin']), fulfillOrder);
 
-// List all orders
-router.get('/', authenticateUser, listOrders);
+// Viewing: super_admin, distributor_admin, customer
+router.get('/', checkRole(['super_admin', 'distributor_admin', 'customer']), getAllOrders);
+router.get('/:id', checkRole(['super_admin', 'distributor_admin', 'customer']), getOrder);
+router.get('/customer/:customer_id', checkRole(['super_admin', 'distributor_admin', 'customer']), getCustomerOrders);
 
-// Cancel order
-router.patch('/:id/cancel', authenticateUser, cancelOrder);
+// Allowed Roles per module:
+// Orders: super_admin, distributor_admin
+// Payments: super_admin, finance, distributor_admin
+// Invoices: super_admin, finance, distributor_admin
+// Inventory Fulfillment: super_admin, inventory, distributor_admin
+router.patch('/:id/status', checkRole(['super_admin', 'distributor_admin']), updateOrderStatus);
 
-// Check if invoice can be generated for order
-router.get('/:id/check-invoice', authenticateUser, checkInvoiceGeneration);
-
-export default router; 
+module.exports = router;

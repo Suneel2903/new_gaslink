@@ -1,4 +1,4 @@
-import pool from './db.js';
+const pool = require('./db.js');
 
 // Configurable threshold per cylinder type (could be fetched from DB in future)
 const THRESHOLDS = {

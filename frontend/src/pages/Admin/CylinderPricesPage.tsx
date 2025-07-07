@@ -62,6 +62,25 @@ export default function CylinderPricesPage() {
     setLoading(true);
     setError("");
     setSuccess(false);
+
+    // Ensure all cylinder types have a valid price
+    if (
+      cylinderTypes.some(
+        type =>
+          !priceInputs.find(
+            p =>
+              p.cylinder_type_id === type.cylinder_type_id &&
+              p.unit_price !== "" &&
+              !isNaN(Number(p.unit_price)) &&
+              Number(p.unit_price) > 0 // Optionally require > 0
+          )
+      )
+    ) {
+      setError("Please enter a valid price for every cylinder type.");
+      setLoading(false);
+      return;
+    }
+
     try {
       await api.cylinderPrices.insert({
         month: selectedMonth,

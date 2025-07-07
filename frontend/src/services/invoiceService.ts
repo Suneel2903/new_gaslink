@@ -1,4 +1,6 @@
 import apiClient from './apiClient';
+import { auth } from './firebase';
+import axios from 'axios';
 
 export interface InvoiceItem {
   invoice_item_id: string;
@@ -121,7 +123,7 @@ class InvoiceService {
 
   // Check if invoice can be generated for order
   async checkInvoiceGeneration(orderId: string): Promise<InvoiceGenerationCheck> {
-    const response = await apiClient.get(`/orders/${orderId}/check-invoice`);
+    const response = await apiClient.get(`/invoices/from-order/${orderId}`);
     return response.data;
   }
 
@@ -132,6 +134,102 @@ class InvoiceService {
     });
     return response.data;
   }
+
+  // Fetch invoice by order ID
+  async fetchInvoiceByOrderId(order_id: string): Promise<Invoice> {
+    const token = await auth.currentUser?.getIdToken(true);
+    const response = await axios.get(
+      `${import.meta.env.VITE_API_BASE_URL}/invoices/from-order/${order_id}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+    return response.data;
+  }
+
+  // Batch check invoices for multiple order_ids
+  async checkMultipleInvoices(orderIds: string[]): Promise<Record<string, { invoice_id: string; status: string } | null>> {
+    const response = await apiClient.post('/invoices/check-multiple', { order_ids: orderIds });
+    return response.data;
+  }
+
+  // Upload invoice PDF for OCR extraction
+  async uploadInvoicePDF(file: File): Promise<{ success: boolean; items_inserted: number }> {
+    const token = await auth.currentUser?.getIdToken(true);
+    const formData = new FormData();
+    formData.append('pdf', file);
+    const response = await axios.post(
+      `${import.meta.env.VITE_API_BASE_URL}/ocr/invoice/upload`,
+      formData,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    );
+    return response.data;
+  }
+
+  // Fetch all corporation invoices for review
+  async fetchCorporationInvoices(): Promise<any[]> {
+    const token = await auth.currentUser?.getIdToken(true);
+    const response = await axios.get(
+      `${import.meta.env.VITE_API_BASE_URL}/ocr/corporation-invoices`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+    return response.data.invoices;
+  }
+
+  // Upload ERV PDF for OCR extraction
+  async uploadERVPDF(file: File): Promise<{ success: boolean }> {
+    const token = await auth.currentUser?.getIdToken(true);
+    const formData = new FormData();
+    formData.append('pdf', file);
+    const response = await axios.post(
+      `${import.meta.env.VITE_API_BASE_URL}/ocr/erv/upload`,
+      formData,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    );
+    return response.data;
+  }
+
+  // Fetch all outgoing ERVs
+  async fetchOutgoingERVs(): Promise<any[]> {
+    const token = await auth.currentUser?.getIdToken(true);
+    const response = await axios.get(
+      `${import.meta.env.VITE_API_BASE_URL}/ocr/outgoing-ervs`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+    return response.data.ervs;
+  }
 }
 
-export default new InvoiceService(); 
+export default new InvoiceService();
+export const fetchInvoiceByOrderId = async (order_id: string) => {
+  const token = await auth.currentUser?.getIdToken(true);
+  const response = await axios.get(
+    `${import.meta.env.VITE_API_BASE_URL}/invoices/from-order/${order_id}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+  return response.data;
+}; 

@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "lpg-cylinder-app",
+  "private_key_id": "0723523920a5e83eec4f6cca94994e4b551bd7e9",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEugIBADANBgkqhkiG9w0BAQEFAASCBKQwggSgAgEAAoIBAQDJaypzOWgE+ZGC\nRUvc5nqpGxgk2xGdYT4vIfa8BTzNonVNrHhWrI+DqH34KInWkXCJxdd1e5hwWpMo\nCDZgx8D8KhMYr6Bh41DkbGr8j/yQRw04DA8t/8/WTmA6NGkGvhO6DJkpO9odZ3tN\nFDmmpo8WSPNwUv12Sd3+KK0dHdbHGwcg05RrrBMuosC3RSm3eFFehggHGMA5WrCp\ncLLooPg3fW4f95+C6lO4om5vz7GhnaCbQyueLBY7ynsL3D2m1cO0RtbIYEgfxLIw\ncHO3oxF5VdG24kI3jVPq+w+3voYX1qcUP6n4o0BAqjQn4AvmtehVzvegFv2NIUu2\nX+WyBrzxAgMBAAECgf90nE0aiJHNNe/x5WZJoRl17iNisxhvogaU1kUGD48BC2oY\nBIVnKMbhCOhlU8Ysw4DNqUAkdEa9EkzZts3eTWFQnJgrVc+BqYMCIpxa78Gshg/R\nJkPJ9Eb2LxbnAipyc0YlRxK+6Wsauvgkl+3Vd3imN9xsAdNca64EB4JLtfEyzU80\nLrsarCkU2A7QTRzSC56SENBzQXaonbPdh3tQIwh/kPdi8PAD14dnBrAPqmYbqCE4\n5+ErHIueMsLqmNo7l3/aALNGNeiZcHN/L6AiiVSAdTxCgCdHPLR7PjZgSTdXU1y3\nI84WVGg9MbQlw5XQ4ykC+7/CO70zEBr9rJ0lDSECgYEA6jX/+jInDdRX0chRlJuj\nKRR1sv2Qyvrq+ItM0qzEairRLVAGM8XIUE9cHNDHT0h3qZktuZAgopieHb6JR4wK\n70ThIDnG8AfZqZu9sVSFYCbTk6jCy4f3s4jLN+96GUgAGl2aWmK44NxxBvMAY8UA\n4faOE2a/k/BCzIblpoxiDiECgYEA3Cgt8UH/t3fzVkvMDEBfLpwBHYsgbcf1+MrP\nZZzLAhpnyRvt1qUYQ83g1pkh+Sk6oGazDcoXxxlZhkb7vu6mPi0GJlmNvIQMMh+n\n8m7tTcRE0VDXLVBzbysGuTLR21+wXyw5idVgB5JWrpIBsRrS7QbDu9dv0FPTHC+T\nzT7KtNECgYAYGPxAat6XzqxGelzidG0CMge2Jd6687wvXG3IE1yWK9ef2Ob6drQY\nh0HL+TM4lhUxzv/kYs7oy9kg6FTJlsAdRDIBldBBLB2aFNscnrymWvhT7f404MV8\npGt8Uth2N3FDRTQ3boblI+lBNMlqen+PwEV3+49kkkjdMFf6neEM4QKBgC1AuQjR\nNx3gMw128Q9HoAj1mikXcuf95Sppja3mR7g78z9cVUv8jXtKcz/JJDmR5vIXihB4\njOCo7kTyjEaXyWYYXR4+5Cpuvg8DgMMNWAvXHwojYsd2tPOR1YT11DsSdS9q6LzT\nNjT4OIcTjfN4fwinjk4rH1mkEU3G3cufb40xAoGAXF8vjyRgJUNyTT4XJSqkvmpY\n+fFyiQAvnWp+myTYm66ZJIpndbiJDCv32Cg4aC8pDvdfFLe6MU6FcFFMfW1xLWYJ\nATlS78+90d9zkorCL5q8tJeb1M1iYC7WGIMJFwZLgo57zL/6Xtqn/vbDa3HFxCfW\nr2dgOMkQwn+/Hnj+58Q=\n-----END PRIVATE KEY-----\n",
+  "client_email": "bankstatementreader@lpg-cylinder-app.iam.gserviceaccount.com",
+  "client_id": "116803587629628354315",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/bankstatementreader%40lpg-cylinder-app.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

@@ -1,6 +1,6 @@
-import pool from '../db.js';
+const pool = require('../db.js');
 
-export const createOrder = async (req, res) => {
+const createOrder = async (req, res) => {
   try {
     // Get distributor_id from req.user if not provided in body
     let { distributor_id, customer_id, delivery_date, delivery_address, delivery_time_slot, items } = req.body;
@@ -70,67 +70,69 @@ export const createOrder = async (req, res) => {
   }
 };
 
-export const updateOrderStatus = async (req, res) => {
+const updateOrderStatus = async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  const user = req.user;
+
+  if (!id || !status) {
+    return res.status(400).json({ error: 'Order ID and new status are required.' });
+  }
+
   try {
-    const { id } = req.params;
-    const { status, delivered_quantities, empties_collected } = req.body;
-    if (!status) return res.status(400).json({ error: 'Missing status' });
+    // Validate order exists
+    const { rows: orderRows } = await pool.query('SELECT * FROM orders WHERE order_id = $1', [id]);
+    if (orderRows.length === 0) {
+      return res.status(404).json({ error: 'Order not found.' });
+    }
+
+    // Restrict distributor_admin to their own distributor's orders
+    if (user.role === 'distributor_admin' && orderRows[0].distributor_id !== user.distributor_id) {
+      return res.status(403).json({ error: 'Forbidden: Cannot update orders for other distributors.' });
+    }
+
+    // Optionally: Validate allowed status transitions here
+    // e.g., only allow DELIVERED_PENDING_CONFIRMATION -> DELIVERED_CONFIRMED
 
     // Update order status
-    const orderResult = await pool.query(
-      `UPDATE orders SET status = $1, updated_at = NOW() WHERE order_id = $2 RETURNING *`,
+    await pool.query(
+      'UPDATE orders SET status = $1, updated_at = NOW() WHERE order_id = $2',
       [status, id]
     );
-    if (orderResult.rowCount === 0) return res.status(404).json({ error: 'Order not found' });
-    const order = orderResult.rows[0];
 
-    // If delivered, update inventory and order_items
-    if (status === 'delivered') {
-      // Get all order items
-      const itemsResult = await pool.query(
-        `SELECT cylinder_type_id, quantity FROM order_items WHERE order_id = $1`,
-        [id]
-      );
-      for (const item of itemsResult.rows) {
-        // Update delivered_quantity and empties_collected if provided
-        let deliveredQty = delivered_quantities?.[item.cylinder_type_id];
-        let empties = empties_collected?.[item.cylinder_type_id];
-        if (deliveredQty === undefined) deliveredQty = item.quantity;
-        if (empties === undefined) empties = 0;
-        deliveredQty = parseInt(deliveredQty, 10) || 0;
-        empties = parseInt(empties, 10) || 0;
-        await pool.query(
-          `UPDATE order_items SET delivered_quantity = $1, empties_collected = $2, updated_at = NOW() WHERE order_id = $3 AND cylinder_type_id = $4`,
-          [deliveredQty, empties, id, item.cylinder_type_id]
-        );
-        // Decrement full_quantity for each cylinder type in inventory
-        await pool.query(
-          `UPDATE inventory SET full_quantity = GREATEST(full_quantity - $1, 0), updated_at = NOW()
-           WHERE distributor_id = $2 AND cylinder_type_id = $3`,
-          [deliveredQty, order.distributor_id, item.cylinder_type_id]
-        );
-      }
-    }
-    // (Optional) If cancelled, restore stock if you implement reservation logic
-    return res.json({ order });
+    // Audit log (simple console log, or insert into audit table if you have one)
+    console.log(`Order ${id} status updated to ${status} by user ${user.user_id || user.firebase_uid} (${user.role})`);
+
+    return res.json({ success: true, order_id: id, new_status: status });
   } catch (err) {
-    console.error('Update order status error:', err);
-    res.status(500).json({ error: 'Failed to update order status' });
+    console.error('Error updating order status:', err);
+    return res.status(500).json({ error: 'Internal server error.' });
   }
 };
 
-export const listOrders = async (req, res) => {
+const listOrders = async (req, res) => {
   try {
-    const { distributor_id } = req.user;
-    // 1. Get all orders with customer discount
-    const ordersResult = await pool.query(`
-      SELECT o.order_id, o.order_number, o.status, o.delivery_date, o.created_at, o.customer_id,
-             c.business_name AS customer_name, c.discount
-      FROM orders o
-      LEFT JOIN customers c ON o.customer_id = c.customer_id
-      WHERE o.distributor_id = $1 AND o.deleted_at IS NULL
-      ORDER BY o.created_at DESC
-    `, [distributor_id]);
+    const { role, distributor_id } = req.user;
+    let ordersResult;
+    if (role === 'super_admin') {
+      ordersResult = await pool.query(`
+        SELECT o.order_id, o.order_number, o.status, o.delivery_date, o.created_at, o.customer_id,
+               c.business_name AS customer_name, c.discount
+        FROM orders o
+        LEFT JOIN customers c ON o.customer_id = c.customer_id
+        WHERE o.deleted_at IS NULL
+        ORDER BY o.created_at DESC
+      `);
+    } else {
+      ordersResult = await pool.query(`
+        SELECT o.order_id, o.order_number, o.status, o.delivery_date, o.created_at, o.customer_id,
+               c.business_name AS customer_name, c.discount
+        FROM orders o
+        LEFT JOIN customers c ON o.customer_id = c.customer_id
+        WHERE o.distributor_id = $1 AND o.deleted_at IS NULL
+        ORDER BY o.created_at DESC
+      `, [distributor_id]);
+    }
     const orders = ordersResult.rows;
     const orderIds = orders.map(o => o.order_id);
     // 2. Get all items for these orders, join cylinder_types
@@ -234,7 +236,7 @@ export const listOrders = async (req, res) => {
   }
 };
 
-export const cancelOrder = async (req, res) => {
+const cancelOrder = async (req, res) => {
   try {
     const { id } = req.params;
     // Only allow cancelling if not already delivered or cancelled
@@ -252,7 +254,7 @@ export const cancelOrder = async (req, res) => {
   }
 };
 
-export const checkInvoiceGeneration = async (req, res) => {
+const checkInvoiceGeneration = async (req, res) => {
   try {
     const { id } = req.params;
     const { distributor_id } = req.user;
@@ -296,4 +298,74 @@ export const checkInvoiceGeneration = async (req, res) => {
     console.error('Check invoice generation error:', err);
     res.status(500).json({ error: 'Failed to check invoice generation' });
   }
+};
+
+// Get a single order by ID
+const getOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { distributor_id } = req.user;
+    const orderResult = await pool.query(
+      `SELECT * FROM orders WHERE order_id = $1 AND distributor_id = $2 AND deleted_at IS NULL`,
+      [id, distributor_id]
+    );
+    if (orderResult.rowCount === 0) return res.status(404).json({ error: 'Order not found' });
+    res.json(orderResult.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch order', details: err.message });
+  }
+};
+
+// Alias for listOrders
+const getAllOrders = listOrders;
+
+// Alias for updateOrderStatus
+const updateOrder = updateOrderStatus;
+
+// Alias for cancelOrder
+const deleteOrder = cancelOrder;
+
+// Fulfill order (mark as delivered, minimal implementation)
+const fulfillOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Mark order as delivered
+    const orderResult = await pool.query(
+      `UPDATE orders SET status = 'delivered', updated_at = NOW() WHERE order_id = $1 AND deleted_at IS NULL RETURNING *`,
+      [id]
+    );
+    if (orderResult.rowCount === 0) return res.status(404).json({ error: 'Order not found' });
+    res.json({ message: 'Order fulfilled', order: orderResult.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fulfill order', details: err.message });
+  }
+};
+
+// List all orders for a customer
+const getCustomerOrders = async (req, res) => {
+  try {
+    const { customer_id } = req.params;
+    const { distributor_id } = req.user;
+    const ordersResult = await pool.query(
+      `SELECT * FROM orders WHERE customer_id = $1 AND distributor_id = $2 AND deleted_at IS NULL ORDER BY created_at DESC`,
+      [customer_id, distributor_id]
+    );
+    res.json(ordersResult.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch customer orders', details: err.message });
+  }
+};
+
+module.exports = {
+  createOrder,
+  updateOrderStatus,
+  listOrders,
+  cancelOrder,
+  checkInvoiceGeneration,
+  getOrder,
+  getAllOrders,
+  updateOrder,
+  deleteOrder,
+  fulfillOrder,
+  getCustomerOrders
 }; 
