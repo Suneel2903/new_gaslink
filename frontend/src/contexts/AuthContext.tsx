@@ -18,6 +18,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<UserCredential>;
   logout: () => Promise<void>;
   clearUser: () => void;
+  setSelectedDistributorId: (id: string | null) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -31,64 +32,80 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<string | null>(null);
   const [distributorId, setDistributorId] = useState<string | null>(null);
-  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [selectedDistributorId, setSelectedDistributorId] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setUser(user);
-      setLoading(false);
-      if (user && !profileLoaded) {
-        // Get and store the user's ID token
-        user.getIdToken().then((token) => {
-          localStorage.setItem('authToken', token);
-        });
-        // Fetch user profile from backend to get role and distributor_id
+      
+      if (user) {
         try {
+          // Use cached token for faster load
+          const token = await user.getIdToken();
+          localStorage.setItem('authToken', token);
+          
+          // Fetch user profile
           const res = await api.users.getProfile();
-          console.log("Profile fetch response:", res.data);
-          setRole(res.data.role || null);
-          setDistributorId(res.data.distributor_id || null);
-          setProfileLoaded(true);
+          // Use the correct structure: { user: { ... } }
+          const profile = res.data?.user || res.data?.data?.user || res.data;
+          if (!profile || !profile.role) {
+            throw new Error('User profile or role missing from API response');
+          }
+          setRole(profile.role || null);
+          setDistributorId(profile.distributor_id || null);
+          
+          // Load saved selection for super admins
+          if (profile.role === 'super_admin') {
+            const saved = sessionStorage.getItem('selectedDistributorId');
+            if (saved) {
+              setSelectedDistributorId(saved);
+            }
+          }
         } catch (err) {
-          console.error('Failed to fetch user profile:', err);
+          console.error('Auth error:', err);
           setRole(null);
           setDistributorId(null);
-          setProfileLoaded(false);
         }
-      } else if (!user) {
+      } else {
         localStorage.removeItem('authToken');
+        sessionStorage.removeItem('selectedDistributorId');
         setRole(null);
         setDistributorId(null);
-        setProfileLoaded(false);
+        setSelectedDistributorId(null);
       }
+      
+      setLoading(false);
     });
+    
     return () => unsubscribe();
-  }, [profileLoaded]);
+  }, []);
 
   const login = async (email: string, password: string) => {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     const token = await userCredential.user.getIdToken();
     localStorage.setItem('authToken', token);
-    // Fetch user profile after login
-    try {
-      const res = await api.users.getProfile();
-      setRole(res.data.role || null);
-      setDistributorId(res.data.distributor_id || null);
-    } catch {
-      setRole(null);
-      setDistributorId(null);
-    }
     return userCredential;
   };
 
   const logout = async () => {
     await signOut(auth);
     localStorage.removeItem('authToken');
+    sessionStorage.removeItem('selectedDistributorId');
   };
 
   const clearUser = () => {
     setUser(null);
     localStorage.removeItem('authToken');
+    sessionStorage.removeItem('selectedDistributorId');
+  };
+
+  const handleSetSelectedDistributorId = (id: string | null) => {
+    setSelectedDistributorId(id);
+    if (id) {
+      sessionStorage.setItem('selectedDistributorId', id);
+    } else {
+      sessionStorage.removeItem('selectedDistributorId');
+    }
   };
 
   const isSuperAdmin = role === 'super_admin';
@@ -97,11 +114,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     user,
     loading,
     role,
-    distributor_id: distributorId,
+    distributor_id: isSuperAdmin ? selectedDistributorId : distributorId,
     isSuperAdmin,
     login,
     logout,
     clearUser,
+    setSelectedDistributorId: handleSetSelectedDistributorId,
   };
 
   return (
@@ -119,7 +137,6 @@ export const useAuth = () => {
   return context;
 };
 
-// Full-screen loader component
 export const FullScreenLoader: React.FC = () => {
   return (
     <div className="fixed inset-0 bg-white dark:bg-gray-900 flex items-center justify-center z-50">

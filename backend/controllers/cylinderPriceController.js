@@ -56,12 +56,23 @@ const upsertPrices = async (req, res) => {
 const getPricesByMonthYear = async (req, res) => {
   try {
     const { month, year } = req.query;
-    if (!month || !year) return res.status(400).json({ error: 'Month and year are required' });
+    let distributor_id = req.user?.distributor_id;
+    if (req.user?.role === 'super_admin') {
+      distributor_id = req.query.distributor_id;
+      if (Array.isArray(distributor_id)) {
+        distributor_id = distributor_id[0];
+      }
+    }
+    console.log("Received distributor_id:", distributor_id, "month:", month, "year:", year);
+    if (!month || !year || !distributor_id) return res.status(400).json({ error: 'Month, year, and distributor_id are required' });
     const { rows } = await pool.query(
-      `SELECT cylinder_type_id, unit_price FROM cylinder_prices WHERE month = $1 AND year = $2`,
-      [month, year]
+      `SELECT cp.cylinder_type_id, ct.name as cylinder_type_name, ct.capacity_kg, ct.description, cp.unit_price
+       FROM cylinder_prices cp
+       JOIN cylinder_types ct ON cp.cylinder_type_id = ct.cylinder_type_id
+       WHERE cp.distributor_id = $1 AND cp.month = $2 AND cp.year = $3`,
+      [distributor_id, month, year]
     );
-    res.json(rows);
+    res.json({ data: rows });
   } catch (err) {
     console.error('Failed to fetch prices by month/year', err);
     res.status(500).json({ error: 'Failed to fetch prices by month/year' });
@@ -71,6 +82,17 @@ const getPricesByMonthYear = async (req, res) => {
 // Get all cylinder prices (latest month/year)
 const getAllCylinderPrices = async (req, res) => {
   try {
+    const { role } = req.user;
+    let { distributor_id } = req.user;
+    if (role === 'super_admin') {
+      distributor_id = req.query.distributor_id;
+      if (!distributor_id) {
+        return res.status(400).json({ error: 'Super admin must select a distributor first.' });
+      }
+    }
+    if (!distributor_id) {
+      return res.status(400).json({ error: 'Missing distributor_id in request.' });
+    }
     // Get the latest month/year in the table
     const { rows: latestRows } = await pool.query(
       `SELECT month, year FROM cylinder_prices ORDER BY year DESC, month DESC LIMIT 1`

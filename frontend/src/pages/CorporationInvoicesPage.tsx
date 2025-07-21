@@ -1,18 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import invoiceService from '../services/invoiceService';
+import type { ApiError, AC4ERVInvoice, OutgoingERV } from '../types';
+
+interface UploadResult {
+  success?: boolean;
+  error?: string;
+  items_inserted?: number;
+  extracted_data?: Record<string, unknown>;
+}
 
 const CorporationInvoicesPage: React.FC = () => {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadResult, setUploadResult] = useState<any>(null);
+  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
   const [uploadLoading, setUploadLoading] = useState(false);
-  const [invoices, setInvoices] = useState<any[]>([]);
-  const [outgoingERVs, setOutgoingERVs] = useState<any[]>([]);
+  const [invoices, setInvoices] = useState<AC4ERVInvoice[]>([]);
+  const [outgoingERVs, setOutgoingERVs] = useState<OutgoingERV[]>([]);
   const [uploadERVFile, setUploadERVFile] = useState<File | null>(null);
-  const [uploadERVResult, setUploadERVResult] = useState<any>(null);
+  const [uploadERVResult, setUploadERVResult] = useState<UploadResult | null>(null);
   const [uploadERVLoading, setUploadERVLoading] = useState(false);
   const [loadingInvoices, setLoadingInvoices] = useState(true);
   const [loadingOutgoingERVs, setLoadingOutgoingERVs] = useState(false);
   const [activeTab, setActiveTab] = useState<'incoming' | 'outgoing'>('incoming');
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [distributor_id, setDistributorId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [corporationInvoices, setCorporationInvoices] = useState<AC4ERVInvoice[]>([]);
 
   useEffect(() => {
     if (activeTab === 'incoming') {
@@ -22,12 +34,22 @@ const CorporationInvoicesPage: React.FC = () => {
     }
   }, [activeTab]);
 
+  useEffect(() => {
+    if (isSuperAdmin && !distributor_id) {
+      setLoading(false);
+      return;
+    }
+    fetchCorporationInvoices();
+  }, [distributor_id, isSuperAdmin]);
+
   const fetchInvoices = async () => {
     setLoadingInvoices(true);
     try {
       const data = await invoiceService.fetchCorporationInvoices();
       setInvoices(data);
-    } catch (err) {
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      console.error('Error fetching invoices:', apiError);
       setInvoices([]);
     }
     setLoadingInvoices(false);
@@ -38,7 +60,9 @@ const CorporationInvoicesPage: React.FC = () => {
     try {
       const data = await invoiceService.fetchOutgoingERVs();
       setOutgoingERVs(data);
-    } catch (err) {
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      console.error('Error fetching outgoing ERVs:', apiError);
       setOutgoingERVs([]);
     }
     setLoadingOutgoingERVs(false);
@@ -63,8 +87,9 @@ const CorporationInvoicesPage: React.FC = () => {
       const result = await invoiceService.uploadInvoicePDF(uploadFile);
       setUploadResult(result);
       fetchInvoices(); // Refresh after upload
-    } catch (err: any) {
-      setUploadResult({ error: err?.response?.data?.error || err.message });
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      setUploadResult({ error: apiError.message || 'Upload failed' });
     }
     setUploadLoading(false);
   };
@@ -76,11 +101,54 @@ const CorporationInvoicesPage: React.FC = () => {
       const result = await invoiceService.uploadERVPDF(uploadERVFile);
       setUploadERVResult(result);
       fetchOutgoingERVs(); // Refresh after upload
-    } catch (err: any) {
-      setUploadERVResult({ error: err?.response?.data?.error || err.message });
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      setUploadERVResult({ error: apiError.message || 'Upload failed' });
     }
     setUploadERVLoading(false);
   };
+
+  const fetchCorporationInvoices = async () => {
+    setLoading(true);
+    try {
+      const data = await invoiceService.fetchCorporationInvoices();
+      setCorporationInvoices(data);
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      console.error('Error fetching AC4/ERV invoices:', apiError);
+      setCorporationInvoices([]);
+    }
+    setLoading(false);
+  };
+
+  // Defensive UI checks
+  if (isSuperAdmin && !distributor_id) {
+    return null; // Already handled in DashboardLayout
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  if (!corporationInvoices) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-red-500">Something went wrong loading AC4/ERV invoices</div>
+      </div>
+    );
+  }
+
+  if (corporationInvoices.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-gray-500">No AC4/ERV invoices found.</div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-5xl mx-auto mt-8 p-4 border rounded bg-gray-50">
@@ -156,88 +224,92 @@ const CorporationInvoicesPage: React.FC = () => {
       <h3 className="text-md font-semibold mb-2">
         {activeTab === 'outgoing' ? 'All Outgoing ERVs' : "All Incoming AC4's"}
       </h3>
-      {(activeTab === 'incoming' ? loadingInvoices : loadingOutgoingERVs) ? (
+      {(activeTab === 'outgoing' ? loadingOutgoingERVs : loadingInvoices) ? (
         <div>Loading...</div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-full text-xs border">
-            <thead>
-              <tr className="bg-gray-200">
-                {activeTab === 'incoming' ? (
-                  <>
-                    <th className="p-2 border">File Name</th>
-                    <th className="p-2 border">Tax Invoice No</th>
-                    <th className="p-2 border">Invoice No</th>
-                    <th className="p-2 border">TT No</th>
-                    <th className="p-2 border">Date</th>
-                    <th className="p-2 border">Eway Bill</th>
-                    <th className="p-2 border">PO Ref</th>
-                    <th className="p-2 border">Item No</th>
-                    <th className="p-2 border">Material Code</th>
-                    <th className="p-2 border">Description</th>
-                    <th className="p-2 border">Qty</th>
-                    <th className="p-2 border">Unit</th>
-                    <th className="p-2 border">HSN</th>
-                    <th className="p-2 border">Approved</th>
-                  </>
-                ) : (
-                  <>
-                    <th className="p-2 border">Distributor SAP Code</th>
-                    <th className="p-2 border">SAP Plant Code</th>
-                    <th className="p-2 border">AC4 No</th>
-                    <th className="p-2 border">SAP Doc No</th>
-                    <th className="p-2 border">Truck No</th>
-                    <th className="p-2 border">Delivery Challan Date</th>
-                    <th className="p-2 border">Delivery Challan No</th>
-                    <th className="p-2 border">Equipment Code</th>
-                    <th className="p-2 border">Return Description</th>
-                    <th className="p-2 border">Quantity</th>
-                  </>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {activeTab === 'incoming' ? (
-                invoices.map((row, idx) => (
-                  <tr key={row.id || idx} className="border-b">
-                    <td className="p-2 border">{row.file_name}</td>
-                    <td className="p-2 border">{row.tax_invoice_no}</td>
-                    <td className="p-2 border">{row.invoice_no}</td>
-                    <td className="p-2 border">{row.tt_no}</td>
-                    <td className="p-2 border">{row.date ? new Date(row.date).toLocaleDateString() : ''}</td>
-                    <td className="p-2 border">{row.eway_bill}</td>
-                    <td className="p-2 border">{row.po_ref}</td>
-                    <td className="p-2 border">{row.item_no}</td>
-                    <td className="p-2 border">{row.material_code}</td>
-                    <td className="p-2 border">{row.material_description}</td>
-                    <td className="p-2 border">{row.quantity}</td>
-                    <td className="p-2 border">{row.unit}</td>
-                    <td className="p-2 border">{row.hsn_code}</td>
-                    <td className="p-2 border">{row.approved ? '✅' : '❌'}</td>
-                  </tr>
-                ))
-              ) : (
-                outgoingERVs.length === 0 ? (
-                  <tr><td colSpan={10} className="p-2 border text-center text-gray-400">No outgoing ERVs found.</td></tr>
-                ) : (
-                  outgoingERVs.map((row, idx) => (
-                    <tr key={row.id || idx} className="border-b">
-                      <td className="p-2 border">{row.distributor_sap_code}</td>
-                      <td className="p-2 border">{row.sap_plant_code}</td>
-                      <td className="p-2 border">{row.ac4_no}</td>
-                      <td className="p-2 border">{row.sap_doc_no}</td>
-                      <td className="p-2 border">{row.truck_no}</td>
-                      <td className="p-2 border">{row.delivery_challan_date}</td>
-                      <td className="p-2 border">{row.delivery_challan_no}</td>
-                      <td className="p-2 border">{row.equipment_code}</td>
-                      <td className="p-2 border">{row.return_description}</td>
-                      <td className="p-2 border">{row.quantity}</td>
+          <p className="text-gray-600">
+            {activeTab === 'incoming' 
+              ? `Found ${invoices.length} AC4/ERV invoices` 
+              : `Found ${outgoingERVs.length} outgoing ERVs`
+            }
+          </p>
+          {activeTab === 'outgoing' && outgoingERVs.length > 0 && (
+            (() => {
+              const excludeKeys = [
+                'ac4_date',
+                'ac4_receipt_datetime',
+                'driver_name',
+                'e_way_bill_amount',
+                'remarks',
+              ];
+              const keys = outgoingERVs[0] ? Object.keys(outgoingERVs[0]).filter(k => !excludeKeys.includes(k)) : [];
+              return (
+                <table className="min-w-full divide-y divide-gray-200 mt-4">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      {keys.map((key) => (
+                        <th key={key} className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          {key}
+                        </th>
+                      ))}
                     </tr>
-                  ))
-                )
-              )}
-            </tbody>
-          </table>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {outgoingERVs.map((erv, idx) => (
+                      <tr key={idx}>
+                        {keys.map((key) => (
+                          <td key={key} className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                            {typeof (erv as Record<string, any>)[key] === 'object'
+                              ? JSON.stringify((erv as Record<string, any>)[key])
+                              : String((erv as Record<string, any>)[key])}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              );
+            })()
+          )}
+          {activeTab === 'incoming' && invoices.length > 0 && (
+            (() => {
+              const excludeKeys = [
+                'ac4_date',
+                'ac4_receipt_datetime',
+                'driver_name',
+                'e_way_bill_amount',
+                'remarks',
+              ];
+              const keys = invoices[0] ? Object.keys(invoices[0]).filter(k => !excludeKeys.includes(k)) : [];
+              return (
+                <table className="min-w-full divide-y divide-gray-200 mt-4">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      {keys.map((key) => (
+                        <th key={key} className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          {key}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {invoices.map((inv, idx) => (
+                      <tr key={idx}>
+                        {keys.map((key) => (
+                          <td key={key} className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                            {typeof (inv as Record<string, any>)[key] === 'object'
+                              ? JSON.stringify((inv as Record<string, any>)[key])
+                              : String((inv as Record<string, any>)[key])}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              );
+            })()
+          )}
         </div>
       )}
     </div>

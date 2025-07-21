@@ -115,11 +115,11 @@ SELECT gen_random_uuid(), d.distributor_id, '{"route": "Ameerpet -> Banjara Hill
 FROM distributors d LIMIT 1;
 
 -- Cylinder Prices (July 2025)
-INSERT INTO cylinder_prices (price_id, cylinder_type_id, unit_price, month, year, created_at, updated_at) VALUES
-  (gen_random_uuid(), '029a4bb0-d8ae-439f-b454-953ac7ab8623', 500, 7, 2025, NOW(), NOW()), -- 5KG
-  (gen_random_uuid(), 'a1637eb7-8fd7-4399-ac39-076f581667c9', 2000, 7, 2025, NOW(), NOW()), -- 19KG
-  (gen_random_uuid(), '3b04abc4-585e-48a2-830a-6e17d5ebef46', 4500, 7, 2025, NOW(), NOW()), -- 47.5KG
-  (gen_random_uuid(), '0381a119-8f26-4ea1-b68d-b25104096cf7', 35000, 7, 2025, NOW(), NOW()); -- 425KG
+INSERT INTO cylinder_prices (price_id, distributor_id, cylinder_type_id, unit_price, month, year, created_at, updated_at) VALUES
+  (gen_random_uuid(), '11111111-1111-1111-1111-111111111111', '029a4bb0-d8ae-439f-b454-953ac7ab8623', 500, 7, 2025, NOW(), NOW()), -- 5KG
+  (gen_random_uuid(), '11111111-1111-1111-1111-111111111111', 'a1637eb7-8fd7-4399-ac39-076f581667c9', 2000, 7, 2025, NOW(), NOW()), -- 19KG
+  (gen_random_uuid(), '11111111-1111-1111-1111-111111111111', '3b04abc4-585e-48a2-830a-6e17d5ebef46', 4500, 7, 2025, NOW(), NOW()), -- 47.5KG
+  (gen_random_uuid(), '11111111-1111-1111-1111-111111111111', '0381a119-8f26-4ea1-b68d-b25104096cf7', 35000, 7, 2025, NOW(), NOW()); -- 425KG
 
 -- Add more sample data for orders, order_items, invoices, disputes, credit_notes, inventory, etc. as needed for preview.
 -- (For brevity, only a preview is shown here. Expand with loops or more rows for full test coverage.) 

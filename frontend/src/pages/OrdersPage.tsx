@@ -1,46 +1,46 @@
 import React, { useEffect, useState } from 'react';
+import { useForm, useFieldArray } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { api } from '../services/apiClient';
 import invoiceService from '../services/invoiceService';
 import { useAuth } from '../contexts/AuthContext';
-import { fetchInvoiceByOrderId } from '../services/invoiceService';
-import { toast } from 'react-toastify';
+import { orderSchema, type OrderFormData } from '../schemas/orderSchema';
+import { editOrderSchema, type EditOrderFormData } from '../schemas/editOrderSchema';
+import FormInput from '../components/FormInput';
+import FormSelect from '../components/FormSelect';
+import useEscKey from '../hooks/useEscKey';
 import 'react-toastify/dist/ReactToastify.css';
+import type { 
+  ApiError, 
+  Order, 
+  Customer, 
+  CylinderType, 
+  OrderStatusChangeRequest,
+} from '../types';
+import EmptyState from '../components/EmptyState';
+import { useDebug } from '../contexts/DebugContext';
 
-interface Order {
-  order_id: string;
-  order_number: string;
-  customer_name: string;
-  customer_id: string;
-  status: string;
-  total_amount: number;
-  delivery_date: string;
-  created_at: string;
-  items?: OrderItem[];
-  total_quantity?: number;
+interface DeliveryInputs {
+  [cylinder_type_id: string]: {
+    delivered: number;
+    empties: number;
+  };
 }
 
-interface OrderItem {
-  cylinder_type_id: string;
-  name?: string;
-  quantity: number;
-  delivered_quantity?: number;
-  empties_collected?: number;
-  order_item_id?: string;
-}
-
-interface Customer {
+interface SimpleCustomer {
   customer_id: string;
   business_name: string;
 }
 
-interface CylinderType {
-  cylinder_type_id: string;
-  name: string;
-  capacity_kg: number;
-  description: string;
+interface SearchFilters {
+  customer: string;
+  status: string;
+  dateFrom: string;
+  dateTo: string;
+  searchTerm: string;
 }
 
-const initialOrderForm = {
+const initialOrderForm: OrderFormData = {
   customer_id: '',
   delivery_date: '',
   items: [{ cylinder_type_id: '', quantity: 1 }],
@@ -48,94 +48,156 @@ const initialOrderForm = {
 
 export const OrdersPage: React.FC = () => {
   const { distributor_id, isSuperAdmin } = useAuth();
+  const debug = useDebug();
+  
+  console.log('Current distributor_id in OrdersPage:', distributor_id, 'isSuperAdmin:', isSuperAdmin);
+
+  // Restore form setup and hooks
+  const {
+    register,
+    handleSubmit,
+    control,
+    formState: { errors },
+    reset,
+  } = useForm<OrderFormData>({
+    resolver: zodResolver(orderSchema),
+    defaultValues: initialOrderForm,
+  });
+
+  const {
+    register: registerEdit,
+    handleSubmit: handleSubmitEdit,
+    control: controlEdit,
+    formState: { errors: editErrors },
+    reset: resetEdit,
+  } = useForm<EditOrderFormData>({
+    resolver: zodResolver(editOrderSchema),
+    defaultValues: initialOrderForm,
+  });
+
+  const { fields, append, remove } = useFieldArray({
+    control,
+    name: 'items',
+  });
+
+  const { fields: editFields, append: appendEdit, remove: removeEdit } = useFieldArray({
+    control: controlEdit,
+    name: 'items',
+  });
+
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [modal, setModal] = useState<'view' | 'edit' | 'new' | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customers, setCustomers] = useState<SimpleCustomer[]>([]);
   const [cylinderTypes, setCylinderTypes] = useState<CylinderType[]>([]);
   const [cylinderTypesLoading, setCylinderTypesLoading] = useState(true);
   const [cylinderTypesError, setCylinderTypesError] = useState('');
-  const [orderForm, setOrderForm] = useState<any>({ ...initialOrderForm });
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
   const [formLoading, setFormLoading] = useState(false);
   const [showDeliveryModal, setShowDeliveryModal] = useState(false);
   const [deliveryModalOrder, setDeliveryModalOrder] = useState<Order | null>(null);
-  const [deliveryInputs, setDeliveryInputs] = useState<any>({});
+  const [deliveryInputs, setDeliveryInputs] = useState<DeliveryInputs>({});
   const [drawerOrder, setDrawerOrder] = useState<Order | null>(null);
   
   // Invoice generation state
-  const [invoiceChecks, setInvoiceChecks] = useState<Record<string, { invoice_id: string; status: string } | null>>({});
+  const [invoiceChecks, setInvoiceChecks] = useState<Record<string, { 
+    invoice_id: string; 
+    status: string; 
+    can_generate?: boolean;
+    existing_invoice?: boolean;
+    message?: string;
+  } | null>>({});
+
+  // New search panel state
+  const [searchFilters, setSearchFilters] = useState<SearchFilters>({
+    customer: '',
+    status: 'all',
+    dateFrom: '',
+    dateTo: '',
+    searchTerm: ''
+  });
+  const [appliedFilters, setAppliedFilters] = useState<SearchFilters>({
+    customer: '',
+    status: 'all',
+    dateFrom: '',
+    dateTo: '',
+    searchTerm: ''
+  });
+  const [showSearchPanel, setShowSearchPanel] = useState(false);
+
+  // UI state for enhancements - removed old customerFilter as it's now part of searchFilters
 
   const fetchOrdersAndInvoices = async () => {
+    console.log('fetchOrdersAndInvoices CALLED');
     setLoading(true);
     try {
-      let response;
-      if (isSuperAdmin) {
-        response = await api.orders.getAll();
-      } else {
-        response = await api.orders.getAll(distributor_id);
-      }
-      setOrders(response.data);
-      // After orders are fetched, batch check invoices for delivered orders
-      const deliveredOrderIds = (response.data || [])
-        .filter((order: Order) => isDeliveredStatus(getOrderStatus(order)))
-        .map((order: Order) => order.order_id);
-      if (deliveredOrderIds.length > 0) {
-        const checks = await invoiceService.checkMultipleInvoices(deliveredOrderIds);
-        setInvoiceChecks(checks);
-      } else {
-        setInvoiceChecks({});
-      }
-    } catch (error) {
-      console.error('Error fetching orders or checking invoices:', error);
+      console.log('Fetching orders from API... distributor_id:', distributor_id);
+      let response = await api.orders.getAll(distributor_id || undefined);
+      console.log('Orders API response:', response);
+      setOrders(response.data?.data || response.data || []);
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      console.error('Error fetching orders or checking invoices:', apiError);
     } finally {
       setLoading(false);
+      console.log('Set loading to false in OrdersPage');
     }
   };
 
   useEffect(() => {
-    if (!isSuperAdmin && !distributor_id) return;
+    if (isSuperAdmin && !distributor_id) {
+      setLoading(false);
+      return;
+    }
     fetchOrdersAndInvoices();
   }, [distributor_id, isSuperAdmin]);
 
   useEffect(() => {
+    debug.log(`Fetching customers for distributor_id: ${distributor_id}, isSuperAdmin: ${isSuperAdmin}`);
     setCylinderTypesLoading(true);
     setCylinderTypesError('');
-    api.customers.getAll().then(res => {
-      // Fallback: if customer_id is missing, use business_name as ID
-      const customersWithId = (res.data || []).map((c: any) => ({
+    api.customers.getAll(distributor_id || undefined).then(res => {
+      // Accepts both array and { data: array } formats
+      const raw = Array.isArray(res.data) ? res.data : (res.data.data ?? []);
+      const customersWithId = raw.map((c: Customer) => ({
         customer_id: c.customer_id || c.business_name || '',
-        business_name: c.business_name || c.name || '',
+        business_name: c.business_name || '',
       }));
+      debug.log(`Fetched customers: ${JSON.stringify(customersWithId)}`);
       setCustomers(customersWithId);
-    }).catch(() => setCustomers([]));
+    }).catch((error) => {
+      debug.log(`❌ Error fetching customers: ${error?.message || error}`);
+      setCustomers([]);
+    });
     // Fetch cylinder types from backend
-    api.cylinderTypes.getAll().then(res => {
-      setCylinderTypes(res.data || []);
+    api.cylinderTypes.getAll(distributor_id || undefined).then(res => {
+      // Accepts both array and { data: array } formats
+      const raw = Array.isArray(res.data) ? res.data : (res.data.data ?? []);
+      // Map to ensure name/capacity fields are present
+      const mapped = raw.map((ct: any) => ({
+        ...ct,
+        name: ct.name,
+        capacity: ct.capacity_kg,
+      }));
+      setCylinderTypes(mapped);
       setCylinderTypesLoading(false);
-    }).catch(() => {
+    }).catch((error) => {
+      console.error('❌ Error fetching cylinder types:', error);
       setCylinderTypes([]);
       setCylinderTypesError('Failed to load cylinder types');
       setCylinderTypesLoading(false);
     });
-  }, []);
-
-  useEffect(() => {
-    console.log("✅ Cylinder Types:", cylinderTypes);
-  }, [cylinderTypes]);
+  }, [distributor_id, isSuperAdmin]);
 
   const openDeliveryModal = (order: Order) => {
-    const initialInputs: any = {};
-    (order.items || []).forEach(item => {
+    const initialInputs: DeliveryInputs = {};
+    (order.items ?? []).forEach(item => {
       initialInputs[item.cylinder_type_id] = {
-        delivered: item.quantity,
-        empties: 0,
+        delivered: item.delivered_quantity !== null && item.delivered_quantity !== undefined ? item.delivered_quantity : item.quantity,
+        empties: item.empties_collected || 0,
       };
     });
     setDeliveryInputs(initialInputs);
@@ -144,11 +206,11 @@ export const OrdersPage: React.FC = () => {
   };
 
   const handleDeliveryInputChange = (cylinder_type_id: string, field: 'delivered' | 'empties', value: number) => {
-    setDeliveryInputs((prev: any) => ({
+    setDeliveryInputs((prev: DeliveryInputs) => ({
       ...prev,
       [cylinder_type_id]: {
-        ...prev[cylinder_type_id],
-        [field]: value,
+        delivered: field === 'delivered' ? value : (prev[cylinder_type_id]?.delivered || 0),
+        empties: field === 'empties' ? value : (prev[cylinder_type_id]?.empties || 0),
       },
     }));
   };
@@ -158,8 +220,12 @@ export const OrdersPage: React.FC = () => {
     setUpdatingId(deliveryModalOrder.order_id);
     // Validate inputs
     let valid = true;
-    (deliveryModalOrder.items || []).forEach(item => {
+    (deliveryModalOrder.items ?? []).forEach(item => {
       const inp = deliveryInputs[item.cylinder_type_id];
+      if (!inp) {
+        valid = false;
+        return;
+      }
       // Only allow integers, no floats, no leading zeros
       if (
         !Number.isInteger(Number(inp.delivered)) ||
@@ -173,114 +239,84 @@ export const OrdersPage: React.FC = () => {
       setUpdatingId(null);
       return;
     }
-    // Build payload
-    const delivered_quantities: any = {};
-    const empties_collected: any = {};
-    (deliveryModalOrder.items || []).forEach(item => {
-      delivered_quantities[item.cylinder_type_id] = parseInt(deliveryInputs[item.cylinder_type_id].delivered, 10);
-      empties_collected[item.cylinder_type_id] = parseInt(deliveryInputs[item.cylinder_type_id].empties, 10);
-    });
+    // Build payload for deliveries array
+    const deliveries = (deliveryModalOrder.items ?? []).map(item => ({
+      order_id: deliveryModalOrder.order_id,
+      order_item_id: item.order_item_id,
+      customer_id: deliveryModalOrder.customer_id,
+      cylinder_type_id: item.cylinder_type_id,
+      delivered_qty: Number(deliveryInputs[item.cylinder_type_id]?.delivered ?? 0),
+      empties_collected: Number(deliveryInputs[item.cylinder_type_id]?.empties ?? 0)
+    }));
     try {
       await api.orders.changeStatus(
         deliveryModalOrder.order_id,
         'delivered',
-        { delivered_quantities, empties_collected }
+        {
+          status: 'delivered',
+          delivered_quantities: deliveries.reduce<Record<string, number>>((acc, d) => { acc[d.cylinder_type_id] = d.delivered_qty; return acc; }, {}),
+          empties_collected: deliveries.reduce<Record<string, number>>((acc, d) => { acc[d.cylinder_type_id] = d.empties_collected; return acc; }, {})
+        }
       );
       // Inventory integration: push delivered/empties to summary with new API format
-      // TODO: Replace with real distributor_id from context or auth
-      const distributor_id = '11111111-1111-1111-1111-111111111111';
       await api.inventory.updateFromDelivery({
         distributor_id,
-        date: deliveryModalOrder.delivery_date?.split('T')[0],
-        deliveries: (deliveryModalOrder.items || [])
-          .filter(item => !!item.order_item_id)
-          .map(item => ({
-            order_id: deliveryModalOrder.order_id,
-            order_item_id: item.order_item_id, // always a real UUID now
-            customer_id: deliveryModalOrder.customer_id,
-            cylinder_type_id: item.cylinder_type_id,
-            delivered_qty: delivered_quantities[item.cylinder_type_id],
-            empties_collected: empties_collected[item.cylinder_type_id],
-          }))
-      });
-      await fetchOrdersAndInvoices();
+        date: deliveryModalOrder.delivery_date.split('T')[0],
+        deliveries
+      } as any);
       setShowDeliveryModal(false);
       setDeliveryModalOrder(null);
-    } catch (err) {
-      alert('Failed to update order status');
+      fetchOrdersAndInvoices();
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      alert(apiError.message || 'Failed to confirm delivery');
     } finally {
       setUpdatingId(null);
     }
   };
 
   const handleCancelOrder = async (order_id: string) => {
-    if (!window.confirm('Are you sure you want to cancel this order?')) return;
+    if (!confirm('Are you sure you want to cancel this order?')) return;
     setUpdatingId(order_id);
     try {
-      await api.orders.changeStatus(order_id, 'cancelled');
-      await fetchOrdersAndInvoices();
-    } catch (err) {
-      alert('Failed to cancel order');
+      await api.orders.changeStatus(order_id, 'cancelled', { status: 'cancelled' } as OrderStatusChangeRequest);
+      fetchOrdersAndInvoices();
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      alert(apiError.message || 'Failed to cancel order');
     } finally {
       setUpdatingId(null);
     }
   };
 
-  const filteredOrders = orders.filter(order => {
-    const matchesSearch = order.order_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.customer_name?.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
-
-  const handleFormChange = (field: string, value: any) => {
-    setOrderForm((prev: any) => ({ ...prev, [field]: value }));
-  };
-  const handleItemChange = (idx: number, field: string, value: any) => {
-    setOrderForm((prev: any) => ({
-      ...prev,
-      items: prev.items.map((item: any, i: number) => i === idx ? { ...item, [field]: value } : item),
-    }));
-  };
-  const handleAddItem = () => {
-    setOrderForm((prev: any) => ({ ...prev, items: [...prev.items, { cylinder_type_id: '', quantity: 1 }] }));
-  };
-  const handleRemoveItem = (idx: number) => {
-    setOrderForm((prev: any) => ({ ...prev, items: prev.items.filter((_: any, i: number) => i !== idx) }));
-  };
-
   const closeModal = () => {
     setModal(null);
     setSelectedOrder(null);
-    setOrderForm({ ...initialOrderForm });
+    reset(initialOrderForm);
+    resetEdit(initialOrderForm);
     setFormError('');
     setFormSuccess('');
   };
 
-  const handleOrderFormSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const onSubmit = async (data: OrderFormData) => {
     if (formLoading) return; // Prevent double submit
     setFormError('');
     setFormSuccess('');
     setFormLoading(true);
-    if (!orderForm.customer_id || !orderForm.delivery_date || !orderForm.items.length || orderForm.items.some((item: any) => !item.cylinder_type_id || !item.quantity)) {
-      setFormError('Please fill all required fields.');
-      setFormLoading(false);
-      return;
-    }
+    
     try {
       if (modal === 'new') {
         await api.orders.create({
-          customer_id: orderForm.customer_id,
-          delivery_date: orderForm.delivery_date,
-          items: orderForm.items,
+          distributor_id: distributor_id || '',
+          customer_id: data.customer_id,
+          delivery_date: data.delivery_date,
+          items: data.items,
         });
         setFormSuccess('Order placed successfully!');
       } else if (modal === 'edit' && selectedOrder) {
         await api.orders.update(selectedOrder.order_id, {
-          customer_id: orderForm.customer_id,
-          delivery_date: orderForm.delivery_date,
-          items: orderForm.items,
+          delivery_date: data.delivery_date,
+          items: data.items,
         });
         setFormSuccess('Order updated successfully!');
       }
@@ -293,17 +329,40 @@ export const OrdersPage: React.FC = () => {
     }
   };
 
+  const onSubmitEdit = async (data: EditOrderFormData) => {
+    if (formLoading) return; // Prevent double submit
+    setFormError('');
+    setFormSuccess('');
+    setFormLoading(true);
+    
+    try {
+      if (selectedOrder) {
+        await api.orders.update(selectedOrder.order_id, {
+          delivery_date: data.delivery_date,
+          items: data.items
+        });
+        setFormSuccess('Order updated successfully!');
+        await fetchOrdersAndInvoices();
+        closeModal(); // Close modal immediately on success
+      }
+    } catch (err) {
+      setFormError('Failed to update order');
+    } finally {
+      setFormLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (modal === 'edit' && selectedOrder) {
-      setOrderForm({
+      resetEdit({
         customer_id: selectedOrder.customer_id,
-        delivery_date: selectedOrder.delivery_date ? selectedOrder.delivery_date.split('T')[0] : '',
-        items: selectedOrder.items || [{ cylinder_type_id: '', quantity: 1 }],
+        delivery_date: selectedOrder.delivery_date?.split('T')[0] || '',
+        items: selectedOrder.items ?? [{ cylinder_type_id: '', quantity: 1 }],
       });
     } else if (modal === 'new') {
-      setOrderForm({ ...initialOrderForm });
+      reset(initialOrderForm);
     }
-  }, [modal, selectedOrder]);
+  }, [modal, selectedOrder, reset, resetEdit]);
 
   useEffect(() => {
     const handleOpenNewOrderModal = () => {
@@ -316,6 +375,13 @@ export const OrdersPage: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (modal === 'new') {
+      debug.log(`Add Order modal opened. distributor_id: ${distributor_id}, isSuperAdmin: ${isSuperAdmin}`);
+      debug.log(`Customers array: ${JSON.stringify(customers)}`);
+    }
+  }, [modal, distributor_id, customers, isSuperAdmin]);
+
   const getOrderStatus = (order: Order) => {
     if (order.status === 'delivered' && order.items && order.items.some(i => typeof i.delivered_quantity === 'number' && i.delivered_quantity !== i.quantity)) {
       return 'modified delivered';
@@ -325,62 +391,186 @@ export const OrdersPage: React.FC = () => {
   };
 
   const isDeliveredStatus = (status: string) => status === 'delivered' || status === 'modified delivered';
+  const isUndeliveredStatus = (status: string) => status === 'pending' || status === 'processing';
 
-  // Generate invoice for an order
-  const handleGenerateInvoice = async (orderId: string) => {
-    try {
-      await invoiceService.createFromOrder(orderId);
-      alert('Invoice generated successfully!');
-    } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to generate invoice');
+  // TODO: Implement invoice viewing functionality
+
+  // New search panel handlers
+  const handleSearchKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      setAppliedFilters({ ...searchFilters });
     }
   };
 
-  // Update handleViewInvoice to use new logic and toasts
-  const handleViewInvoice = async (order_id: string) => {
-    try {
-      const invoiceData = await fetchInvoiceByOrderId(order_id);
-      // TODO: open modal, viewer, or navigate with invoiceData
-      console.log('Fetched invoice:', invoiceData);
-    } catch (err: any) {
-      if (err.response?.status === 404) {
-        toast.error('❌ Invoice not available for this order');
-      } else {
-        toast.error('⚠️ Failed to fetch invoice');
-        console.error('Fetch invoice error:', err);
+  const handleFilterChange = (field: keyof SearchFilters, value: string) => {
+    setSearchFilters(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleSearchSubmit = () => {
+    setAppliedFilters({ ...searchFilters });
+  };
+
+  const clearFilters = () => {
+    const clearedFilters = {
+      customer: '',
+      status: 'all',
+      dateFrom: '',
+      dateTo: '',
+      searchTerm: ''
+    };
+    setSearchFilters(clearedFilters);
+    setAppliedFilters(clearedFilters);
+  };
+
+  const hasActiveFilters = () => {
+    return appliedFilters.customer || 
+           appliedFilters.status !== 'all' || 
+           appliedFilters.dateFrom || 
+           appliedFilters.dateTo || 
+           appliedFilters.searchTerm;
+  };
+
+  // ESC key handler to close modals
+  useEscKey({
+    onEsc: () => {
+      if (modal) {
+        closeModal();
       }
-    }
-  };
+      if (showDeliveryModal) {
+        setShowDeliveryModal(false);
+      }
+      if (drawerOrder) {
+        setDrawerOrder(null);
+      }
+    },
+    isActive: Boolean(modal || showDeliveryModal || drawerOrder)
+  });
 
   if (cylinderTypesLoading) return <div className="p-8 text-center text-gray-500">Loading cylinder types...</div>;
 
+  console.log("orders before filter:", orders);
+  // Filtered orders with new search panel
+  const filteredOrders = (orders ?? []).filter(order => {
+    const matchesSearch = !appliedFilters.searchTerm || 
+      order.order_number?.toLowerCase().includes(appliedFilters.searchTerm.toLowerCase()) ||
+      order.customer_name?.toLowerCase().includes(appliedFilters.searchTerm.toLowerCase());
+    
+    const matchesStatus = appliedFilters.status === 'all' || getOrderStatus(order) === appliedFilters.status;
+    
+    const matchesCustomer = !appliedFilters.customer || order.customer_id === appliedFilters.customer;
+    
+    const matchesDateFrom = !appliedFilters.dateFrom || 
+      (order.delivery_date && new Date(order.delivery_date) >= new Date(appliedFilters.dateFrom));
+    
+    const matchesDateTo = !appliedFilters.dateTo || 
+      (order.delivery_date && new Date(order.delivery_date) <= new Date(appliedFilters.dateTo));
+    
+    return matchesSearch && matchesStatus && matchesCustomer && matchesDateFrom && matchesDateTo;
+  });
+  console.log("orders before map:", filteredOrders);
+
+  // Defensive UI checks
+  if (isSuperAdmin && !distributor_id) {
+    return null; // Already handled in DashboardLayout
+  }
+
+  if (loading) {
+    return (
+      <div className="p-6 max-w-7xl mx-auto">
+        <div className="card">
+          <div className="p-8 text-center text-gray-500">Loading orders...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!orders) {
+    return (
+      <div className="p-6 max-w-7xl mx-auto">
+        <div className="card">
+          <div className="p-8 text-center text-red-500">Something went wrong loading orders</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (orders.length === 0) {
+    return (
+      <div className="p-6 max-w-7xl mx-auto">
+        <div className="card">
+          <EmptyState message="No orders found." />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-6 max-w-none mx-auto">
       <div className="mb-8 w-full flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex-1 min-w-0">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Orders</h1>
           <p className="text-gray-600 dark:text-gray-400">Manage customer orders and track delivery status</p>
         </div>
         <div className="flex flex-row flex-wrap gap-4 justify-end items-center w-full sm:w-auto">
+          <button
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-semibold"
+            onClick={() => setModal('new')}
+          >
+            + Add Order
+          </button>
         </div>
       </div>
 
+      {/* New Search Panel */}
       <div className="card p-6 mb-6">
-        <div className="flex flex-col md:flex-row gap-4">
-          <div className="flex-1">
-            <input
-              type="text"
-              placeholder="Search orders..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="input-field"
-            />
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Search & Filters</h3>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowSearchPanel(!showSearchPanel)}
+              className="text-blue-600 hover:text-blue-700 text-sm font-medium"
+            >
+              {showSearchPanel ? 'Hide' : 'Show'} Advanced
+            </button>
+            {hasActiveFilters() && (
+              <button
+                onClick={clearFilters}
+                className="text-red-600 hover:text-red-700 text-sm font-medium"
+              >
+                Clear All
+              </button>
+            )}
           </div>
-          <div className="w-full md:w-48">
+        </div>
+
+        {/* Basic Search Row */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Customer
+            </label>
             <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="input-field"
+              value={searchFilters.customer}
+              onChange={(e) => handleFilterChange('customer', e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="">All Customers</option>
+              {customers.map((c) => (
+                <option key={c.customer_id} value={c.customer_id}>
+                  {c.business_name}
+                </option>
+              ))}
+            </select>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Status
+            </label>
+            <select
+              value={searchFilters.status}
+              onChange={(e) => handleFilterChange('status', e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="all">All Status</option>
               <option value="pending">Pending</option>
@@ -390,37 +580,156 @@ export const OrdersPage: React.FC = () => {
               <option value="cancelled">Cancelled</option>
             </select>
           </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Search Orders
+            </label>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Search by order # or customer name..."
+                value={searchFilters.searchTerm}
+                onChange={(e) => handleFilterChange('searchTerm', e.target.value)}
+                onKeyPress={handleSearchKeyPress}
+                className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+              <button
+                onClick={handleSearchSubmit}
+                className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </button>
+            </div>
+          </div>
         </div>
+
+        {/* Advanced Search Panel */}
+        {showSearchPanel && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Delivery Date From
+              </label>
+              <input
+                type="date"
+                value={searchFilters.dateFrom}
+                onChange={(e) => handleFilterChange('dateFrom', e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Delivery Date To
+              </label>
+              <input
+                type="date"
+                value={searchFilters.dateTo}
+                onChange={(e) => handleFilterChange('dateTo', e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Search Button */}
+        <div className="flex justify-end mt-4">
+          <button
+            onClick={handleSearchSubmit}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-md font-medium transition-colors"
+          >
+            Search Orders
+          </button>
+        </div>
+
+        {/* Active Filters Display */}
+        {hasActiveFilters() && (
+          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <div className="flex flex-wrap gap-2">
+              <span className="text-sm text-gray-600 dark:text-gray-400">Active filters:</span>
+              {appliedFilters.customer && (
+                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                  Customer: {customers.find(c => c.customer_id === appliedFilters.customer)?.business_name}
+                  <button
+                    onClick={() => handleFilterChange('customer', '')}
+                    className="ml-1 text-blue-600 hover:text-blue-800"
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+              {appliedFilters.status !== 'all' && (
+                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                  Status: {appliedFilters.status}
+                  <button
+                    onClick={() => handleFilterChange('status', 'all')}
+                    className="ml-1 text-green-600 hover:text-green-800"
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+              {appliedFilters.searchTerm && (
+                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
+                  Search: {appliedFilters.searchTerm}
+                  <button
+                    onClick={() => handleFilterChange('searchTerm', '')}
+                    className="ml-1 text-purple-600 hover:text-purple-800"
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+              {(appliedFilters.dateFrom || appliedFilters.dateTo) && (
+                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">
+                  Date: {appliedFilters.dateFrom || 'Any'} - {appliedFilters.dateTo || 'Any'}
+                  <button
+                    onClick={() => {
+                      handleFilterChange('dateFrom', '');
+                      handleFilterChange('dateTo', '');
+                    }}
+                    className="ml-1 text-yellow-600 hover:text-yellow-800"
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="card overflow-hidden">
         {loading ? (
           <div className="p-8 text-center text-gray-500">Loading orders...</div>
-        ) : error ? (
-          <div className="p-8 text-center text-red-500">{error}</div>
         ) : filteredOrders.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">No orders found.</div>
+          <div className="p-8 text-center text-gray-500">
+            {hasActiveFilters() ? 'No orders match your search criteria.' : 'No orders found.'}
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
               <thead className="bg-gray-50 dark:bg-gray-800">
                 <tr>
-                  <th className="px-4 py-2 text-left font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Order #</th>
-                  <th className="px-4 py-2 text-left font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Customer</th>
-                  <th className="px-4 py-2 text-left font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
-                  <th className="px-4 py-2 text-left font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Total Amount</th>
-                  <th className="px-4 py-2 text-left font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Delivery Date</th>
-                  <th className="px-4 py-2 text-left font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Initial Order Qty</th>
-                  <th className="px-4 py-2 text-left font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Created At</th>
-                  <th className="px-4 py-2 text-left font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+                  <th className="px-4 py-2 text-center font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Order #</th>
+                  <th className="px-4 py-2 text-center font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Customer</th>
+                  <th className="px-4 py-2 text-center font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
+                  <th className="px-4 py-2 text-center font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Total Amount</th>
+                  <th className="px-4 py-2 text-center font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Delivery Date</th>
+                  <th className="px-4 py-2 text-center font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Initial Order Qty</th>
+                  <th className="px-4 py-2 text-center font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Created At</th>
+                  <th className="px-4 py-2 text-center font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
-                {filteredOrders.map((order) => (
+                {(filteredOrders ?? []).map((order) => (
                   <tr key={order.order_id} className="hover:bg-gray-50 dark:hover:bg-gray-800">
-                    <td className="px-4 py-2 font-medium text-gray-900 dark:text-white">{order.order_number}</td>
-                    <td className="px-4 py-2 text-gray-500 dark:text-gray-400">{order.customer_name}</td>
-                    <td className="px-4 py-2">
+                    <td className="px-4 py-2 text-center font-medium text-gray-900 dark:text-white">{order.order_number}</td>
+                    <td className="px-4 py-2 text-center text-gray-500 dark:text-gray-400">{order.customer_name}</td>
+                    <td className="px-4 py-2 text-center">
                       <span className={`px-2 py-1 text-xs font-medium rounded-full ${
                         isDeliveredStatus(getOrderStatus(order)) ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' :
                         order.status === 'processing' ? 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200' :
@@ -430,101 +739,53 @@ export const OrdersPage: React.FC = () => {
                         {getOrderStatus(order)}
                       </span>
                     </td>
-                    <td className="px-4 py-2 text-gray-500 dark:text-gray-400">{order.total_amount !== undefined ? `₹${Number(order.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '₹0.00'}</td>
-                    <td className="px-4 py-2 text-gray-500 dark:text-gray-400">{order.delivery_date ? new Date(order.delivery_date).toLocaleDateString() : '-'}</td>
-                    <td className="px-4 py-2 text-gray-500 dark:text-gray-400">
+                    <td className="px-4 py-2 text-center text-gray-500 dark:text-gray-400">{order.total_amount !== undefined ? `₹${Number(order.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '₹0.00'}</td>
+                    <td className="px-4 py-2 text-center text-gray-500 dark:text-gray-400">{order.delivery_date ? new Date(order.delivery_date).toLocaleDateString() : '-'}</td>
+                    <td className="px-4 py-2 text-center text-gray-500 dark:text-gray-400">
                       {Array.isArray(order.items) && order.items.length > 0
-                        ? <div className="flex flex-col gap-1">
+                        ? <div className="flex flex-col gap-1 items-center">
                             {order.items.map(i => {
                               const ct = cylinderTypes.find(ct => ct.cylinder_type_id === i.cylinder_type_id);
-                              return <div key={i.cylinder_type_id}>{ct ? `${ct.capacity_kg}KG × ${i.quantity}` : `Unknown × ${i.quantity}`}</div>;
+                              return <div key={i.cylinder_type_id}>{ct ? `${ct.name} × ${i.quantity}` : `Unknown × ${i.quantity}`}</div>;
                             })}
                           </div>
                         : cylinderTypesLoading ? 'Loading...' : '-'}
                     </td>
-                    <td className="px-4 py-2 text-gray-500 dark:text-gray-400">{order.created_at ? new Date(order.created_at).toLocaleDateString() : '-'}</td>
-                    <td className="px-4 py-2 font-medium">
-                      <div className="flex flex-row flex-nowrap gap-2 items-center min-w-[260px]">
-                        {isDeliveredStatus(getOrderStatus(order)) ? (
-                          <div className="flex flex-row flex-nowrap gap-2 items-center min-w-[260px]">
-                            <button
-                              className="bg-gray-100 text-gray-700 px-3 py-1 rounded text-xs font-semibold hover:bg-gray-200 h-8 flex items-center justify-center min-w-[70px]"
-                              onClick={() => { setDrawerOrder(order); }}
-                            >
-                              View
-                            </button>
-                            
-                            {/* Invoice Generation Button */}
-                            {(() => {
-                              const check = invoiceChecks[order.order_id];
-                              
-                              if (!check) {
-                                return (
-                                  <button
-                                    className="bg-gray-100 text-gray-500 px-3 py-1 rounded text-xs font-semibold h-8 flex items-center justify-center min-w-[70px] opacity-50 cursor-not-allowed"
-                                    disabled
-                                    title="Invoice not generated"
-                                  >
-                                    Invoice
-                                  </button>
-                                );
-                              }
-                              
-                              if (check.can_generate) {
-                                return (
-                                  <button
-                                    className="bg-blue-100 text-blue-700 px-3 py-1 rounded text-xs font-semibold hover:bg-blue-200 h-8 flex items-center justify-center min-w-[70px]"
-                                    onClick={() => handleGenerateInvoice(order.order_id)}
-                                  >
-                                    Invoice
-                                  </button>
-                                );
-                              }
-                              
-                              if (check.existing_invoice) {
-                                return (
-                                  <button
-                                    className="bg-green-100 text-green-700 px-3 py-1 rounded text-xs font-semibold h-8 flex items-center justify-center min-w-[70px]"
-                                    title="Invoice already exists"
-                                  >
-                                    Invoiced
-                                  </button>
-                                );
-                              }
-                              
-                              return (
-                                <button
-                                  className="bg-gray-100 text-gray-500 px-3 py-1 rounded text-xs font-semibold h-8 flex items-center justify-center min-w-[70px] opacity-50 cursor-not-allowed"
-                                  disabled
-                                  title={check.message}
-                                >
-                                  Invoice
-                                </button>
-                              );
-                            })()}
-                          </div>
-                        ) : (
+                    <td className="px-4 py-2 text-center text-gray-500 dark:text-gray-400">{order.created_at ? new Date(order.created_at).toLocaleDateString() : '-'}</td>
+                    <td className="px-4 py-2 text-center font-medium">
+                      <div className="flex flex-row flex-nowrap gap-2 items-center justify-center min-w-[260px]">
+                        <button
+                          className="bg-blue-100 text-blue-700 px-3 py-1 rounded text-xs font-semibold hover:bg-blue-200 h-8 flex items-center justify-center min-w-[70px]"
+                          onClick={() => { setDrawerOrder(order); }}
+                        >
+                          View
+                        </button>
+                        {isUndeliveredStatus(getOrderStatus(order)) && (
+                          <button
+                            className="bg-green-100 text-green-700 px-3 py-1 rounded text-xs font-semibold hover:bg-green-200 h-8 flex items-center justify-center min-w-[70px]"
+                            onClick={() => openDeliveryModal(order)}
+                          >
+                            Mark Delivery
+                          </button>
+                        )}
+                        {!isDeliveredStatus(getOrderStatus(order)) && (
                           <>
                             <button
-                              className="bg-gray-100 text-gray-700 px-3 py-1 rounded text-xs font-semibold hover:bg-gray-200 h-8 flex items-center justify-center min-w-[70px]"
-                              onClick={() => { setDrawerOrder(order); }}
+                              className="bg-yellow-100 text-yellow-700 px-3 py-1 rounded text-xs font-semibold hover:bg-yellow-200 h-8 flex items-center justify-center min-w-[70px]"
+                              onClick={() => {
+                                setSelectedOrder(order);
+                                setModal('edit');
+                              }}
+                              disabled={order.status === 'cancelled'}
                             >
                               Edit
                             </button>
                             <button
-                              className="bg-green-100 text-green-700 px-3 py-1 rounded text-xs font-semibold hover:bg-green-200 h-8 flex items-center justify-center min-w-[70px]"
-                              disabled={updatingId === order.order_id}
-                              onClick={() => openDeliveryModal(order)}
-                            >
-                              {updatingId === order.order_id ? 'Saving...' : 'Delivered'}
-                            </button>
-                            <button
-                              className={`bg-red-100 text-red-700 px-3 py-1 rounded text-xs font-semibold hover:bg-red-200 h-8 flex items-center justify-center min-w-[70px] ${updatingId === order.order_id ? 'opacity-50 cursor-not-allowed' : ''}`}
-                              disabled={updatingId === order.order_id}
-                              title={'Cancel this order'}
+                              className="bg-red-100 text-red-700 px-3 py-1 rounded text-xs font-semibold hover:bg-red-200 h-8 flex items-center justify-center min-w-[70px]"
                               onClick={() => handleCancelOrder(order.order_id)}
+                              disabled={order.status === 'cancelled'}
                             >
-                              {updatingId === order.order_id ? 'Cancelling...' : 'Cancel'}
+                              Cancel
                             </button>
                           </>
                         )}
@@ -539,7 +800,14 @@ export const OrdersPage: React.FC = () => {
       </div>
 
       {modal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black bg-opacity-40">
+        <div 
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black bg-opacity-40"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              closeModal();
+            }
+          }}
+        >
           <div className="bg-white rounded-lg shadow-lg w-full max-w-lg p-8 relative animate-fade-in">
             <button
               className="absolute top-3 right-3 text-gray-400 hover:text-gray-700 text-2xl font-bold"
@@ -548,67 +816,65 @@ export const OrdersPage: React.FC = () => {
             >
               &times;
             </button>
-            {(modal === 'new' || (modal === 'edit' && selectedOrder)) && (
+            {modal === 'new' && (
               <>
-                <h2 className="text-xl font-bold mb-4 text-gray-900">{modal === 'new' ? 'Create New Order' : 'Edit Order'}</h2>
-                <form onSubmit={handleOrderFormSubmit} className="space-y-4">
-                  <div>
-                    <label className="block font-medium mb-1">Customer</label>
-                    <select
-                      className="input-field"
-                      value={orderForm.customer_id}
-                      onChange={e => handleFormChange('customer_id', e.target.value)}
-                      required
-                    >
-                      <option value="">Select customer...</option>
-                      {customers.map(c => (
-                        <option key={c.customer_id} value={c.customer_id}>{c.business_name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block font-medium mb-1">Delivery Date</label>
-                    <input
-                      type="date"
-                      className="input-field"
-                      value={orderForm.delivery_date}
-                      onChange={e => handleFormChange('delivery_date', e.target.value)}
-                      required
-                    />
-                  </div>
+                <h2 className="text-xl font-bold mb-4 text-gray-900">Create New Order</h2>
+                <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+                  <FormSelect
+                    label="Customer"
+                    options={[
+                      { value: '', label: 'Select customer...' },
+                      ...customers.map(c => ({ value: c.customer_id, label: c.business_name }))
+                    ]}
+                    error={errors.customer_id}
+                    {...register('customer_id')}
+                  />
+                  <FormInput
+                    label="Delivery Date"
+                    type="date"
+                    error={errors.delivery_date}
+                    {...register('delivery_date')}
+                  />
                   <div>
                     <label className="block font-medium mb-1">Cylinder Types & Quantities</label>
-                    {orderForm.items.length === 0 && (
+                    {fields.length === 0 && (
                       <div className="text-gray-400 italic">Add at least one cylinder type</div>
                     )}
-                    {orderForm.items.map((item: any, idx: number) => (
-                      <div key={idx} className="flex gap-2 mb-2 items-center flex-wrap">
-                        <select
-                          className="input-field"
-                          value={item.cylinder_type_id}
-                          onChange={e => handleItemChange(idx, 'cylinder_type_id', e.target.value)}
-                          required
+                    {fields.map((field, idx) => (
+                      <div key={field.id} className="flex gap-2 mb-2 items-center flex-wrap">
+                        <FormSelect
+                          label=""
+                          options={[
+                            { value: '', label: cylinderTypesLoading ? 'Loading types...' : cylinderTypesError ? 'Failed to load types' : 'Select type...' },
+                            ...cylinderTypes.map(ct => ({ value: ct.cylinder_type_id, label: `${ct.name} (${ct.capacity}kg)` }))
+                          ]}
+                          error={errors.items?.[idx]?.cylinder_type_id}
                           disabled={cylinderTypesLoading || cylinderTypes.length === 0}
-                        >
-                          <option value="">{cylinderTypesLoading ? 'Loading types...' : cylinderTypesError ? 'Failed to load types' : 'Select type...'}</option>
-                          {cylinderTypes.map(ct => (
-                            <option key={ct.cylinder_type_id} value={ct.cylinder_type_id}>{ct.name} ({ct.capacity_kg}kg)</option>
-                          ))}
-                        </select>
-                        <input
+                          {...register(`items.${idx}.cylinder_type_id`)}
+                        />
+                        <FormInput
+                          label=""
                           type="number"
                           min={1}
-                          className="input-field w-24"
-                          value={item.quantity}
-                          onChange={e => handleItemChange(idx, 'quantity', Number(e.target.value))}
-                          required
+                          className="w-24"
+                          error={errors.items?.[idx]?.quantity}
+                          {...register(`items.${idx}.quantity`, { valueAsNumber: true })}
                         />
-                        {orderForm.items.length > 1 && (
-                          <button type="button" className="text-red-500 font-bold text-lg" onClick={() => handleRemoveItem(idx)}>&times;</button>
+                        {fields.length > 1 && (
+                          <button type="button" className="text-red-500 font-bold text-lg" onClick={() => remove(idx)}>&times;</button>
+                        )}
+                        {errors.items?.[idx]?.cylinder_type_id && (
+                          <p className="w-full text-sm text-red-600 dark:text-red-400">{errors.items[idx]?.cylinder_type_id?.message}</p>
+                        )}
+                        {errors.items?.[idx]?.quantity && (
+                          <p className="w-full text-sm text-red-600 dark:text-red-400">{errors.items[idx]?.quantity?.message}</p>
                         )}
                       </div>
                     ))}
-                    <button type="button" className="btn-secondary mt-2" onClick={handleAddItem}>+ Add Cylinder Type</button>
+                    {errors.items && (
+                      <p className="text-sm text-red-600 dark:text-red-400">{errors.items.message}</p>
+                    )}
+                    <button type="button" className="btn-secondary mt-2" onClick={() => append({ cylinder_type_id: '', quantity: 1 })}>+ Add Cylinder Type</button>
                   </div>
                   {formError && <div className="text-red-500 text-center mb-2">{formError}</div>}
                   {formSuccess && <div className="text-green-600 text-center mb-2">{formSuccess}</div>}
@@ -622,13 +888,77 @@ export const OrdersPage: React.FC = () => {
                 </form>
               </>
             )}
+            {modal === 'edit' && selectedOrder && (
+              <>
+                <h2 className="text-xl font-bold mb-4 text-gray-900">Edit Order</h2>
+                <form onSubmit={handleSubmitEdit(onSubmitEdit)} className="space-y-4">
+                  <div>
+                    <label className="block font-medium mb-1">Customer</label>
+                    <div className="input-field bg-gray-100 text-gray-600">
+                      {selectedOrder.customer_name}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">Customer cannot be changed for existing orders</p>
+                  </div>
+                  <FormInput
+                    label="Delivery Date"
+                    type="date"
+                    error={editErrors.delivery_date}
+                    {...registerEdit('delivery_date')}
+                  />
+                  <div>
+                    <label className="block font-medium mb-1">Cylinder Types & Quantities</label>
+                    {editFields.length === 0 && (
+                      <div className="text-gray-400 italic">Add at least one cylinder type</div>
+                    )}
+                    {editFields.map((field, idx) => (
+                      <div key={field.id} className="flex gap-2 mb-2 items-center flex-wrap">
+                        <FormSelect
+                          label=""
+                          options={[
+                            { value: '', label: cylinderTypesLoading ? 'Loading types...' : cylinderTypesError ? 'Failed to load types' : 'Select type...' },
+                            ...cylinderTypes.map(ct => ({ value: ct.cylinder_type_id, label: `${ct.name} (${ct.capacity}kg)` }))
+                          ]}
+                          error={editErrors.items?.[idx]?.cylinder_type_id}
+                          disabled={cylinderTypesLoading || cylinderTypes.length === 0}
+                          {...registerEdit(`items.${idx}.cylinder_type_id`)}
+                        />
+                        <FormInput
+                          label=""
+                          type="number"
+                          min={1}
+                          className="w-24"
+                          error={editErrors.items?.[idx]?.quantity}
+                          {...registerEdit(`items.${idx}.quantity`, { valueAsNumber: true })}
+                        />
+                        {editFields.length > 1 && (
+                          <button type="button" className="text-red-500 font-bold text-lg" onClick={() => removeEdit(idx)}>&times;</button>
+                        )}
+                      </div>
+                    ))}
+                    {editErrors.items && (
+                      <p className="text-sm text-red-600 dark:text-red-400">{editErrors.items.message}</p>
+                    )}
+                    <button type="button" className="btn-secondary mt-2" onClick={() => appendEdit({ cylinder_type_id: '', quantity: 1 })}>+ Add Cylinder Type</button>
+                  </div>
+                  {formError && <div className="text-red-500 text-center mb-2">{formError}</div>}
+                  {formSuccess && <div className="text-green-600 text-center mb-2">{formSuccess}</div>}
+                  <div className="flex justify-end gap-2 mt-4">
+                    <button type="button" className="btn-secondary" onClick={closeModal} disabled={formLoading}>Cancel</button>
+                    <button type="submit" className="btn-primary flex items-center" disabled={formLoading || cylinderTypesLoading || cylinderTypes.length === 0}>
+                      {formLoading && <span className="loader mr-2"></span>}
+                      {formLoading ? 'Saving...' : 'Update Order'}
+                    </button>
+                  </div>
+                </form>
+              </>
+            )}
             {modal === 'view' && selectedOrder && (
               <>
                 <h2 className="text-xl font-bold mb-4 text-gray-900">Order Details</h2>
                 <div className="mb-2"><strong>Order #:</strong> {selectedOrder.order_number}</div>
                 <div className="mb-2"><strong>Customer:</strong> {selectedOrder.customer_name}</div>
                 <div className="mb-2"><strong>Status:</strong> {selectedOrder.status}</div>
-                <div className="mb-2"><strong>Amount:</strong> ${selectedOrder.total_amount}</div>
+                <div className="mb-2"><strong>Amount:</strong> ₹{Number(selectedOrder.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
                 <div className="mb-2"><strong>Delivery Date:</strong> {selectedOrder.delivery_date ? new Date(selectedOrder.delivery_date).toLocaleDateString() : '-'}</div>
                 <div className="mb-2"><strong>Created At:</strong> {selectedOrder.created_at ? new Date(selectedOrder.created_at).toLocaleString() : '-'}</div>
                 <div className="mb-2"><strong>Items:</strong>
@@ -637,12 +967,12 @@ export const OrdersPage: React.FC = () => {
                       const ct = cylinderTypes.find(ct => ct.cylinder_type_id === item.cylinder_type_id);
                       return (
                         <li key={idx}>
-                          {ct ? `${ct.name} (${ct.capacity_kg}kg)` : item.cylinder_type_id} × {item.quantity}
+                          {ct ? [ct.name ? ct.name : '', ct.capacity ? `(${ct.capacity}kg)` : ''].filter(Boolean).join(' ') : item.cylinder_type_id} × {item.quantity}
                           {typeof item.delivered_quantity === 'number' && (
                             <span className="ml-2 text-xs text-blue-600">Delivered: {item.delivered_quantity}</span>
                           )}
                           {typeof item.empties_collected === 'number' && (
-                            <span className="ml-2 text-xs text-green-600">Empties Collected: {item.empties_collected}</span>
+                            <span className="ml-2 text-xs text-gray-600">Empties Collected: {item.empties_collected}</span>
                           )}
                         </li>
                       );
@@ -664,7 +994,14 @@ export const OrdersPage: React.FC = () => {
       )}
 
       {showDeliveryModal && deliveryModalOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowDeliveryModal(false);
+            }
+          }}
+        >
           <div className="bg-white rounded-lg shadow-lg w-full max-w-lg p-8 relative animate-fade-in">
             <button
               className="absolute top-3 right-3 text-gray-400 hover:text-gray-700 text-2xl font-bold"
@@ -688,11 +1025,11 @@ export const OrdersPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {(deliveryModalOrder.items || []).map(item => {
+                {(deliveryModalOrder.items ?? []).map(item => {
                   const ct = cylinderTypes.find(ct => ct.cylinder_type_id === item.cylinder_type_id);
                   return (
                     <tr key={item.cylinder_type_id}>
-                      <td className="px-2 py-1">{ct ? `${ct.name} (${ct.capacity_kg}kg)` : item.cylinder_type_id}</td>
+                      <td className="px-2 py-1">{ct ? [ct.name ? ct.name : '', ct.capacity ? `(${ct.capacity}kg)` : ''].filter(Boolean).join(' ') : item.cylinder_type_id}</td>
                       <td className="px-2 py-1">{item.quantity}</td>
                       <td className="px-2 py-1">
                         <input
@@ -753,12 +1090,12 @@ export const OrdersPage: React.FC = () => {
                   const isModified = typeof item.delivered_quantity === 'number' && item.delivered_quantity !== item.quantity;
                   return (
                     <li key={idx}>
-                      {ct ? `${ct.capacity_kg}KG` : item.cylinder_type_id} × {item.quantity}
+                      {ct ? [ct.name ? ct.name : '', ct.capacity ? `(${ct.capacity}kg)` : ''].filter(Boolean).join(' ') : item.cylinder_type_id} × {item.quantity}
                       {isModified && (
                         <span className="ml-2 text-xs text-blue-600">Delivered: {item.delivered_quantity}</span>
                       )}
                       {typeof item.empties_collected === 'number' && (
-                        <span className="ml-2 text-xs text-green-600">Empties Collected: {item.empties_collected}</span>
+                        <span className="ml-2 text-xs text-gray-600">Empties Collected: {item.empties_collected}</span>
                       )}
                     </li>
                   );
@@ -779,7 +1116,7 @@ export const OrdersPage: React.FC = () => {
                   className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-semibold hover:bg-green-200"
                   onClick={() => { setDrawerOrder(null); openDeliveryModal(drawerOrder); }}
                 >
-                  Delivered
+                  Mark Delivery
                 </button>
                 <button
                   className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300"

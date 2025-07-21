@@ -83,13 +83,14 @@ CREATE TABLE cylinder_types (
 -- =========================
 CREATE TABLE cylinder_prices (
     price_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    distributor_id UUID NOT NULL REFERENCES distributors(distributor_id) ON DELETE CASCADE,
     cylinder_type_id UUID NOT NULL REFERENCES cylinder_types(cylinder_type_id) ON DELETE CASCADE,
     unit_price DECIMAL(10,2) NOT NULL,
     month INT NOT NULL, -- 1-12
     year INT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (cylinder_type_id, month, year)
+    UNIQUE (distributor_id, cylinder_type_id, month, year)
 );
 
 -- =========================

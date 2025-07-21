@@ -1,33 +1,39 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../services/apiClient';
 import { useAuth } from '../contexts/AuthContext';
-
-interface CylinderType {
-  cylinder_type_id: string;
-  name: string;
-  capacity_kg: number;
-  description: string;
-  price: number;
-}
+import type { ApiError, CylinderType } from '../types';
 
 const CylinderPriceAdminPage: React.FC = () => {
-  const { role, loading } = useAuth();
+  const { role, loading, isSuperAdmin, distributor_id } = useAuth();
   const [cylinderTypes, setCylinderTypes] = useState<CylinderType[]>([]);
   const [editing, setEditing] = useState<{ [id: string]: boolean }>({});
   const [prices, setPrices] = useState<{ [id: string]: string }>({});
   const [message, setMessage] = useState<string>('');
   const [error, setError] = useState<string>('');
+  const [cylinderPrices, setCylinderPrices] = useState<CylinderType[]>([]);
+  const [loadingCylinderPrices, setLoadingCylinderPrices] = useState<boolean>(true);
 
   useEffect(() => {
     api.cylinderTypes.getAll().then(res => {
-      setCylinderTypes(res.data);
+      setCylinderTypes(res.data.data);
       const priceMap: { [id: string]: string } = {};
-      res.data.forEach((ct: CylinderType) => {
-        priceMap[ct.cylinder_type_id] = ct.price?.toString() || '';
+      res.data.data.forEach((ct: CylinderType) => {
+        priceMap[ct.cylinder_type_id] = ct.unit_price.toString();
       });
       setPrices(priceMap);
+    }).catch((error: unknown) => {
+      const apiError = error as ApiError;
+      setError(apiError.message || 'Failed to load cylinder types');
     });
   }, []);
+
+  useEffect(() => {
+    if (isSuperAdmin && !distributor_id) {
+      setLoadingCylinderPrices(false);
+      return;
+    }
+    fetchCylinderPrices();
+  }, [distributor_id, isSuperAdmin]);
 
   const handleEdit = (id: string) => {
     setEditing({ ...editing, [id]: true });
@@ -48,22 +54,67 @@ const CylinderPriceAdminPage: React.FC = () => {
   const handleSave = async (id: string) => {
     setMessage('');
     setError('');
-    const newPrice = parseFloat(prices[id]);
+    const priceValue = prices[id];
+    if (!priceValue) {
+      setError('Please enter a valid price.');
+      return;
+    }
+    const newPrice = parseFloat(priceValue);
     if (isNaN(newPrice) || newPrice <= 0) {
       setError('Please enter a valid price.');
       return;
     }
     try {
-      await api.cylinderTypes.updatePrice(id, { price: newPrice });
-      setCylinderTypes(cts => cts.map(ct => ct.cylinder_type_id === id ? { ...ct, price: newPrice } : ct));
+      await api.cylinderTypes.updatePrice(id, { unit_price: newPrice });
+      setCylinderTypes(cts => cts.map(ct => ct.cylinder_type_id === id ? { ...ct, unit_price: newPrice } : ct));
       setEditing({ ...editing, [id]: false });
       setMessage('Price updated successfully.');
-    } catch (err) {
-      setError('Failed to update price.');
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      setError(apiError.message || 'Failed to update price.');
     }
   };
 
-  if (loading) return <div>Loading...</div>;
+  const fetchCylinderPrices = async () => {
+    try {
+      const res = await api.cylinderTypes.getAll();
+      setCylinderPrices(res.data.data);
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      setError(apiError.message || 'Failed to load cylinder prices');
+    } finally {
+      setLoadingCylinderPrices(false);
+    }
+  };
+
+  if (isSuperAdmin && !distributor_id) {
+    return null; // Already handled in DashboardLayout
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  if (!cylinderPrices) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-red-500">Something went wrong loading cylinder prices</div>
+      </div>
+    );
+  }
+
+  if (cylinderPrices.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-gray-500">No cylinder prices found.</div>
+      </div>
+    );
+  }
+
   if (role !== 'admin' && role !== 'finance') {
     return <div className="text-red-600 p-8 text-center">You do not have permission to access this page.</div>;
   }
@@ -85,8 +136,8 @@ const CylinderPriceAdminPage: React.FC = () => {
           {cylinderTypes.map(ct => (
             <tr key={ct.cylinder_type_id} className="border-t">
               <td className="px-4 py-2">{ct.name}</td>
-              <td className="px-4 py-2">{ct.capacity_kg}</td>
-              <td className="px-4 py-2">{ct.description}</td>
+              <td className="px-4 py-2">{ct.capacity}</td>
+              <td className="px-4 py-2">-</td>
               <td className="px-4 py-2">
                 {editing[ct.cylinder_type_id] ? (
                   <input
@@ -97,7 +148,7 @@ const CylinderPriceAdminPage: React.FC = () => {
                     onChange={e => handlePriceChange(ct.cylinder_type_id, e.target.value)}
                   />
                 ) : (
-                  `₹${ct.price}`
+                  `₹${ct.unit_price}`
                 )}
               </td>
               <td className="px-4 py-2">

@@ -1,11 +1,11 @@
 const express = require('express');
-const { authenticateUser } = require('../middleware/auth.js');
+const { verifyFirebaseToken } = require('../middleware/auth.js');
 const { checkRole } = require('../middleware/checkRole.js');
 const { getAllCylinderTypes, createCylinderType, updateCylinderType, deleteCylinderType } = require('../controllers/cylinderTypeController.js');
 
 const router = express.Router();
 
-router.use(authenticateUser);
+router.use(verifyFirebaseToken);
 
 // Only super_admin and distributor_admin can manage cylinder types
 router.get('/', checkRole(['super_admin', 'distributor_admin']), getAllCylinderTypes);

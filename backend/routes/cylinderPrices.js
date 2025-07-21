@@ -1,11 +1,11 @@
 const express = require('express');
-const { authenticateUser } = require('../middleware/auth.js');
+const { verifyFirebaseToken } = require('../middleware/auth.js');
 const { checkRole } = require('../middleware/checkRole.js');
 const { getAllCylinderPrices, createCylinderPrice, updateCylinderPrice, deleteCylinderPrice, upsertPrices } = require('../controllers/cylinderPriceController.js');
 
 const router = express.Router();
 
-router.use(authenticateUser);
+router.use(verifyFirebaseToken);
 
 // Only super_admin and distributor_admin can manage cylinder prices
 router.get('/', checkRole(['super_admin', 'distributor_admin']), getAllCylinderPrices);

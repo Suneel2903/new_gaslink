@@ -1,5 +1,5 @@
 const express = require('express');
-const { authenticateUser } = require('../middleware/auth.js');
+const { verifyFirebaseToken } = require('../middleware/auth.js');
 const { checkRole } = require('../middleware/checkRole.js');
 const {
   getAllCustomers,
@@ -17,7 +17,7 @@ console.log("Customers route loaded");
 
 const router = express.Router();
 
-router.use(authenticateUser);
+router.use(verifyFirebaseToken);
 
 // Admin actions: super_admin, distributor_admin
 router.post('/', checkRole(['super_admin', 'distributor_admin']), createCustomer);

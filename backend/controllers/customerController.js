@@ -3,8 +3,21 @@ const pool = require('../db.js');
 // List all customers for a distributor
 const listCustomers = async (req, res) => {
   try {
-    // Temporarily use default distributor_id for testing
-    const distributor_id = req.user?.distributor_id || '11111111-1111-1111-1111-111111111111';
+    const { role } = req.user;
+    let { distributor_id } = req.user;
+    
+    // For super_admin, allow distributor_id from query
+    if (role === 'super_admin') {
+      distributor_id = req.query.distributor_id;
+      if (!distributor_id) {
+        return res.status(400).json({ error: 'Super admin must select a distributor first.' });
+      }
+    }
+    
+    // Only check for missing distributor_id
+    if (!distributor_id) {
+      return res.status(400).json({ error: 'Invalid distributor_id in request.' });
+    }
     const result = await pool.query(
       `SELECT * FROM customers WHERE distributor_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`,
       [distributor_id]
@@ -31,21 +44,74 @@ const getCustomerById = async (req, res) => {
   }
 };
 
-// Add a default distributor ID for single-distributor setup
-const DEFAULT_DISTRIBUTOR_ID = '11111111-1111-1111-1111-111111111111';
-
 // Add a new customer
 const addCustomer = async (req, res) => {
   try {
-    const distributor_id = (req.user && req.user.distributor_id) || DEFAULT_DISTRIBUTOR_ID;
-    const {
-      customer_code, business_name, contact_person, email, phone,
-      address_line1, address_line2, city, state, postal_code, country,
-      credit_limit, credit_period_days, payment_terms
-    } = req.body;
-    if (!customer_code || !contact_person || !phone || !address_line1 || !city || !state) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    console.log('🔍 Customer creation request body:', req.body);
+    console.log('🔍 User info:', req.user);
+    console.log('🔍 Headers:', req.headers);
+    
+    const { role } = req.user;
+    let { distributor_id } = req.user;
+    
+    // For super_admin, allow distributor_id from request body
+    if (role === 'super_admin') {
+      distributor_id = req.body.distributor_id;
+      if (!distributor_id) {
+        return res.status(400).json({ error: 'Super admin must provide distributor_id in request body.' });
+      }
     }
+    
+    if (!distributor_id) {
+      console.log('❌ Missing distributor_id in user:', req.user);
+      return res.status(400).json({ error: 'Missing distributor_id in request.' });
+    }
+    
+    const {
+      business_name, contact_person, email, phone,
+      address_line1, address_line2, city, state, postal_code, country,
+      credit_period, payment_terms
+    } = req.body;
+    
+    console.log('🔍 Extracted fields:', {
+      contact_person, phone, address_line1, city, state,
+      hasBusinessName: !!business_name,
+      hasEmail: !!email,
+      hasAddressLine2: !!address_line2,
+      hasPostalCode: !!postal_code,
+      hasCountry: !!country,
+      credit_period,
+      payment_terms
+    });
+    
+    // Validate required fields
+    if (!contact_person || !phone || !address_line1 || !city || !state) {
+      const missingFields = [];
+      if (!contact_person) missingFields.push('contact_person');
+      if (!phone) missingFields.push('phone');
+      if (!address_line1) missingFields.push('address_line1');
+      if (!city) missingFields.push('city');
+      if (!state) missingFields.push('state');
+      
+      console.log('❌ Missing required fields:', missingFields);
+      return res.status(400).json({ 
+        error: `Missing required fields: ${missingFields.join(', ')}`,
+        missingFields 
+      });
+    }
+
+    // Generate customer code if not provided
+    let customer_code = req.body.customer_code;
+    if (!customer_code) {
+      // Get the next customer number for this distributor
+      const countResult = await pool.query(
+        `SELECT COUNT(*) as count FROM customers WHERE distributor_id = $1 AND deleted_at IS NULL`,
+        [distributor_id]
+      );
+      const nextNumber = (countResult.rows[0].count || 0) + 1;
+      customer_code = `CUST${String(nextNumber).padStart(3, '0')}`;
+    }
+
     const result = await pool.query(
       `INSERT INTO customers (
         distributor_id, customer_code, business_name, contact_person, email, phone,
@@ -57,9 +123,9 @@ const addCustomer = async (req, res) => {
         $13, $14, $15
       ) RETURNING *`,
       [
-        distributor_id, customer_code, business_name, contact_person, email, phone,
-        address_line1, address_line2, city, state, postal_code, country || 'Nigeria',
-        credit_limit || 0, credit_period_days || 30, payment_terms
+        distributor_id, customer_code, business_name || '', contact_person, email || '', phone,
+        address_line1, address_line2 || '', city, state, postal_code || '', country || 'Nigeria',
+        0, credit_period || 30, payment_terms || 'credit'
       ]
     );
     res.status(201).json(result.rows[0]);
@@ -67,6 +133,7 @@ const addCustomer = async (req, res) => {
     if (err.code === '23505') {
       return res.status(409).json({ error: 'Customer code already exists for this distributor' });
     }
+    console.error('Customer creation error:', err);
     res.status(500).json({ error: 'Failed to add customer', details: err.message });
   }
 };
@@ -206,7 +273,28 @@ const setPreferredDriver = async (req, res) => {
 };
 
 // Aliases for expected route names
-const getAllCustomers = listCustomers;
+const getAllCustomers = async (req, res) => {
+  try {
+    const { role } = req.user;
+    let { distributor_id } = req.user;
+    if (role === 'super_admin') {
+      distributor_id = req.query.distributor_id;
+      if (!distributor_id) {
+        return res.status(400).json({ error: 'Super admin must select a distributor first.' });
+      }
+    }
+    if (!distributor_id) {
+      return res.status(400).json({ error: 'Missing distributor_id in request.' });
+    }
+    const result = await pool.query(
+      `SELECT * FROM customers WHERE distributor_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`,
+      [distributor_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch customers', details: err.message });
+  }
+};
 const getCustomer = getCustomerById;
 const createCustomer = addCustomer;
 const deleteCustomer = deactivateCustomer;

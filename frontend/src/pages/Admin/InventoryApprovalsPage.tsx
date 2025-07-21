@@ -19,9 +19,9 @@ const InventoryApprovalsPage: React.FC = () => {
     setError(null);
     try {
       const adjRes = await api.inventory.getPendingAdjustments('pending');
-      setPendingAdjustments(adjRes.data);
+      setPendingAdjustments(adjRes.data.data);
       const repRes = await api.inventory.getReplenishments('pending');
-      setPendingReplenishments(repRes.data);
+      setPendingReplenishments(repRes.data.data);
     } catch (err: any) {
       setError('Failed to fetch approvals');
     } finally {
@@ -47,7 +47,7 @@ const InventoryApprovalsPage: React.FC = () => {
     setLoading(true);
     setSuccess(null);
     try {
-      await api.inventory.updateReplenishment(id, { status, admin_id });
+      await api.inventory.updateReplenishment(id, { status, approved_by: admin_id });
       setSuccess('Replenishment updated!');
       fetchApprovals();
     } catch {
@@ -56,6 +56,10 @@ const InventoryApprovalsPage: React.FC = () => {
       setLoading(false);
     }
   };
+
+  console.log("pendingAdjustments before filter:", pendingAdjustments);
+  const lostAdjustments = (pendingAdjustments ?? []).filter(adj => adj.field === 'lost');
+  console.log("pendingAdjustments before map:", pendingAdjustments);
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -107,9 +111,9 @@ const InventoryApprovalsPage: React.FC = () => {
             </tr>
           </thead>
           <tbody>
-            {pendingAdjustments.filter(adj => adj.field === 'lost').length === 0 ? (
+            {lostAdjustments.length === 0 ? (
               <tr><td colSpan={6} className="text-center py-4 text-gray-500">No pending lost approvals</td></tr>
-            ) : pendingAdjustments.filter(adj => adj.field === 'lost').map((adj, idx) => (
+            ) : lostAdjustments.map((adj, idx) => (
               <tr key={adj.id} className={idx % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
                 <td className="px-2 py-2 border text-center">{adj.date}</td>
                 <td className="px-2 py-2 border text-center">{adj.cylinder_name || adj.cylinder_type_id}</td>

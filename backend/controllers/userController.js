@@ -118,26 +118,28 @@ const setUserRole = async (req, res) => {
 
 // Get current user's profile
 const getMyProfile = async (req, res) => {
-  try {
-    let result;
-    if (req.user.user_id) {
-      result = await pool.query(
-        'SELECT email, role, distributor_id FROM users WHERE user_id = $1 AND deleted_at IS NULL',
-        [req.user.user_id]
-      );
-    } else if (req.user.firebase_uid || req.user.uid) {
-      result = await pool.query(
-        'SELECT email, role, distributor_id FROM users WHERE firebase_uid = $1 AND deleted_at IS NULL',
-        [req.user.firebase_uid || req.user.uid]
-      );
-    } else {
-      return res.status(401).json({ error: 'User authentication required' });
+  const firebaseUid = req.user?.uid;
+  if (!firebaseUid) return res.status(400).json({ error: "No Firebase UID" });
+  console.log("getMyProfile: Firebase UID:", firebaseUid);
+  const user = await pool.query("SELECT user_id, distributor_id, firebase_uid, email, first_name, last_name, phone, role, status, last_login, created_at, updated_at FROM users WHERE firebase_uid = $1", [firebaseUid]);
+  if (user.rowCount === 0) return res.status(403).json({ error: "User not found" });
+  const u = user.rows[0];
+  res.json({
+    user: {
+      id: u.user_id,
+      distributor_id: u.distributor_id,
+      firebase_uid: u.firebase_uid,
+      email: u.email,
+      first_name: u.first_name,
+      last_name: u.last_name,
+      phone: u.phone,
+      role: u.role,
+      status: u.status,
+      last_login: u.last_login,
+      created_at: u.created_at,
+      updated_at: u.updated_at
     }
-    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
-    res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch profile', details: err.message });
-  }
+  });
 };
 
 module.exports = {

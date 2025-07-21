@@ -36,10 +36,21 @@ const updateCylinderPrice = async (req, res) => {
 // Get all cylinder types
 const getAllCylinderTypes = async (req, res) => {
   try {
+    // const { role } = req.user;
+    // let { distributor_id } = req.user;
+    // if (role === 'super_admin') {
+    //   distributor_id = req.query.distributor_id;
+    //   if (!distributor_id) {
+    //     return res.status(400).json({ error: 'Super admin must select a distributor first.' });
+    //   }
+    // }
+    // if (!distributor_id) {
+    //   return res.status(400).json({ error: 'Missing distributor_id in request.' });
+    // }
     const result = await pool.query(
       `SELECT cylinder_type_id, name, capacity_kg, description, price, is_active, created_at, updated_at FROM cylinder_types WHERE is_active = TRUE AND deleted_at IS NULL ORDER BY capacity_kg ASC`
     );
-    res.json(result.rows);
+    res.json({ data: result.rows });
   } catch (err) {
     console.error('List cylinder types error:', err);
     res.status(500).json({ error: 'Failed to fetch cylinder types' });

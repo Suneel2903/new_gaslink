@@ -1,5 +1,21 @@
 import React, { useEffect, useState } from "react";
-import apiClient, { api } from "../../services/apiClient";
+import { api } from "../../services/apiClient";
+import type { ApiError, CylinderType } from "../../types";
+import { useAuth } from "../../contexts/AuthContext";
+import { useDebug } from "../../contexts/DebugContext";
+
+interface PriceInput {
+  cylinder_type_id: string;
+  unit_price: string;
+}
+
+interface PriceLogEntry {
+  price_id: string;
+  cylinder_type_id: string;
+  unit_price: number;
+  effective_from: string;
+  cylinder_type_name: string;
+}
 
 const months = [
   { value: 1, label: "January" }, { value: 2, label: "February" }, { value: 3, label: "March" },
@@ -10,42 +26,86 @@ const months = [
 const currentYear = new Date().getFullYear();
 
 export default function CylinderPricesPage() {
-  const [cylinderTypes, setCylinderTypes] = useState<any[]>([]);
-  const [priceInputs, setPriceInputs] = useState<any[]>([]);
+  const { log } = useDebug();
+  const { distributor_id, isSuperAdmin } = useAuth();
+  const [cylinderTypes, setCylinderTypes] = useState<CylinderType[]>([]);
+  const [priceInputs, setPriceInputs] = useState<PriceInput[]>([]);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(currentYear);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
-  const [priceLog, setPriceLog] = useState<any[]>([]);
+  const [priceLog, setPriceLog] = useState<PriceLogEntry[]>([]);
   const [pricesExist, setPricesExist] = useState(false);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    api.cylinderTypes.getAll().then(res => setCylinderTypes(res.data));
+    log("Mounted CylinderPricesPage");
+    log("distributor_id: " + distributor_id);
+  }, [distributor_id]);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    log('🔥 CylinderPricesPage useEffect triggered: ' + JSON.stringify({ distributor_id, isSuperAdmin }));
+    if (isSuperAdmin && !distributor_id) {
+      setError("Please select a distributor to view cylinder prices.");
+      setCylinderTypes([]);
+      setPriceLog([]);
+      log('🛑 Guard triggered: distributor_id missing, state cleared');
+      return;
+    }
+    log('🟢 Proceeding to fetch data');
+    log('Calling fetchCylinderTypes()');
+    log('Calling fetchPriceLog()');
+    fetchCylinderTypes();
     fetchPriceLog(selectedMonth, selectedYear);
-  }, [selectedMonth, selectedYear]);
+  }, [selectedMonth, selectedYear, distributor_id, isSuperAdmin]);
+
+  const fetchCylinderTypes = async () => {
+    log('📥 fetchCylinderTypes called');
+    try {
+      const res = await api.cylinderTypes.getAll(distributor_id || undefined);
+      setCylinderTypes(res.data.data ?? []);
+      log('✅ setCylinderTypes: ' + JSON.stringify(res.data.data ?? []));
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      setError(apiError.message || "Failed to fetch cylinder types");
+      setCylinderTypes([]);
+      log('❌ Error in fetchCylinderTypes: ' + (apiError.message || 'Unknown error'));
+    }
+  };
 
   const fetchPriceLog = async (month: number, year: number) => {
+    log('📥 fetchPriceLog called: ' + JSON.stringify({ month, year, distributor_id }));
+    log('Fetching prices:', { distributor_id, month, year });
     setLoading(true);
     setError("");
     setSuccess(false);
     try {
-      const res = await api.cylinderPrices.getByMonthYear(month, year);
-      setPriceLog(res.data);
-      setPricesExist(res.data && res.data.length > 0);
-      if (res.data && res.data.length > 0) {
-        setPriceInputs(res.data.map((p: any) => ({ cylinder_type_id: p.cylinder_type_id, unit_price: p.unit_price })));
+      const res = await api.cylinderPrices.getByMonthYear(month, year, distributor_id ?? undefined);
+      log('Received:', res.data.data ? res.data.data.length : 0, 'entries');
+      setPriceLog(res.data.data ?? []);
+      setPricesExist((res.data.data ?? []).length > 0);
+      log('Fetched price log: ' + JSON.stringify(res.data.data ?? []));
+      if (res.data.data && res.data.data.length > 0) {
+        setPriceInputs(res.data.data.map((p: PriceLogEntry) => ({ cylinder_type_id: p.cylinder_type_id, unit_price: p.unit_price.toString() })));
       } else {
         setPriceInputs([]);
       }
-    } catch (err: any) {
-      setError("Failed to fetch price log");
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      setError(apiError.message || "Failed to fetch price log");
       setPriceLog([]);
       setPricesExist(false);
+      log('❌ Error in fetchPriceLog: ' + (apiError.message || 'Unknown error'));
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    log('Rendering prices:', priceLog.length);
+  }, [priceLog]);
 
   const handlePriceChange = (id: string, value: string) => {
     setPriceInputs(inputs => {
@@ -63,16 +123,16 @@ export default function CylinderPricesPage() {
     setError("");
     setSuccess(false);
 
-    // Ensure all cylinder types have a valid price
+    const safeCylinderTypes = cylinderTypes ?? [];
     if (
-      cylinderTypes.some(
+      safeCylinderTypes.some(
         type =>
           !priceInputs.find(
             p =>
               p.cylinder_type_id === type.cylinder_type_id &&
               p.unit_price !== "" &&
               !isNaN(Number(p.unit_price)) &&
-              Number(p.unit_price) > 0 // Optionally require > 0
+              Number(p.unit_price) > 0
           )
       )
     ) {
@@ -82,26 +142,32 @@ export default function CylinderPricesPage() {
     }
 
     try {
-      await api.cylinderPrices.insert({
-        month: selectedMonth,
-        year: selectedYear,
-        prices: priceInputs.map(p => ({
-          cylinder_type_id: p.cylinder_type_id,
-          unit_price: parseFloat(p.unit_price)
-        }))
-      });
+      for (const priceInput of priceInputs) {
+        await api.cylinderPrices.insert({
+          cylinder_type_id: priceInput.cylinder_type_id,
+          unit_price: parseFloat(priceInput.unit_price),
+          effective_from: `${selectedYear}-${selectedMonth.toString().padStart(2, '0')}-01`
+        });
+      }
       setSuccess(true);
       fetchPriceLog(selectedMonth, selectedYear);
-    } catch (err: any) {
-      setError(err?.response?.data?.error || "Failed to save prices");
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      setError(apiError.message || "Failed to save prices");
     } finally {
       setLoading(false);
     }
   };
 
+  const safePriceLog = priceLog ?? [];
+  const safeCylinderTypes = cylinderTypes ?? [];
+
   return (
     <div className="flex justify-center items-start min-h-[70vh] py-10 bg-gray-50">
       <div className="bg-white shadow-xl rounded-2xl p-8 w-full max-w-2xl border border-gray-100">
+        {error && (
+          <div className="text-red-600 text-center font-medium mb-2">{error}</div>
+        )}
         <h2 className="text-3xl font-extrabold mb-6 text-center text-primary-700">Cylinder Prices <span className='text-base font-normal'>(Admin)</span></h2>
         <div className="flex gap-6 items-center justify-center mb-4">
           <label className="font-medium">Month:</label>
@@ -124,7 +190,7 @@ export default function CylinderPricesPage() {
                 </tr>
               </thead>
               <tbody>
-                {cylinderTypes.map(type => (
+                {safeCylinderTypes.map(type => (
                   <tr key={type.cylinder_type_id} className="hover:bg-gray-50">
                     <td className="border-b px-4 py-2">{type.name}</td>
                     <td className="border-b px-4 py-2">
@@ -144,17 +210,20 @@ export default function CylinderPricesPage() {
               </tbody>
             </table>
           </div>
-          <div className="flex justify-center">
-            <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2 rounded-lg shadow transition-all duration-150 font-semibold text-lg" disabled={loading || pricesExist}>
-              {loading ? "Saving..." : "Save Prices"}
+          {!pricesExist && (
+            <button
+              type="submit"
+              className="mt-6 w-full bg-primary-600 hover:bg-primary-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
+              disabled={loading}
+            >
+              Save Prices
             </button>
-          </div>
+          )}
           {success && <div className="text-green-600 text-center font-medium">Prices saved successfully!</div>}
-          {error && <div className="text-red-600 text-center font-medium">{error}</div>}
         </form>
         <div className="mt-8">
           <h3 className="text-lg font-semibold mb-2">Price Log for {months.find(m => m.value === selectedMonth)?.label} {selectedYear}</h3>
-          {priceLog.length === 0 ? (
+          {safePriceLog.length === 0 ? (
             <div className="text-gray-500 text-center">No prices entered for this month.</div>
           ) : (
             <table className="min-w-full border border-gray-200 rounded-lg shadow-sm">
@@ -165,10 +234,10 @@ export default function CylinderPricesPage() {
                 </tr>
               </thead>
               <tbody>
-                {priceLog.map((p: any) => (
+                {safePriceLog.map((p: any) => (
                   <tr key={p.cylinder_type_id}>
-                    <td className="border-b px-4 py-2">{cylinderTypes.find(ct => ct.cylinder_type_id === p.cylinder_type_id)?.name || p.cylinder_type_id}</td>
-                    <td className="border-b px-4 py-2">₹{p.unit_price}</td>
+                    <td className="border-b px-4 py-2">{safeCylinderTypes.find(ct => ct.cylinder_type_id === p.cylinder_type_id)?.name || p.cylinder_type_id}</td>
+                    <td className="border-b px-4 py-2">₹{Number(p.unit_price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                   </tr>
                 ))}
               </tbody>

@@ -22,8 +22,12 @@ const inventoryRoutes = require('./routes/inventory.js');
 const invoiceRoutes = require('./routes/invoices.js');
 const paymentRoutes = require('./routes/payments.js');
 const distributorRoutes = require('./routes/distributors.js');
+const dashboardRoutes = require('./routes/dashboard.js');
+const settingsRoutes = require('./routes/settings.js');
 const ocrRoutes = require('./routes/ocrRoutes.js');
+const vehicleRoutes = require('./routes/vehicles.js');
 const zohoOAuthRoutes = require('./zohoOAuth.js');
+const gstRoutes = require('./controllers/gstController.js');
 
 dotenv.config();
 
@@ -69,6 +73,24 @@ app.get('/health', (req, res) => {
 
 // API Routes
 app.use('/api/users', userRoutes);
+
+// Test route for vehicle controller
+app.get('/api/test-vehicle', async (req, res) => {
+  try {
+    const vehicleController = require('./controllers/vehicleController');
+    res.json({ 
+      success: true, 
+      message: 'Vehicle controller loaded successfully',
+      functions: Object.keys(vehicleController)
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
 app.use('/api/orders', orderRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/distributors', distributorRoutes);
@@ -77,10 +99,19 @@ app.use('/api/cylinder-prices', cylinderPricesRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/invoices', invoiceRoutes);
 app.use('/api/payments', paymentRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/settings', settingsRoutes);
 app.use('/api/ocr', ocrRoutes);
+app.use('/api/vehicle', vehicleRoutes);
+app.use('/api/gst', gstRoutes);
 
 // Zoho OAuth Routes
 app.use('/zoho', zohoOAuthRoutes);
+
+// 404 handler for API routes (must be before static or catch-all)
+app.use('/api/*', (req, res) => {
+  res.status(404).json({ error: 'API route not found' });
+});
 
 // 404 handler
 app.use('*', (req, res) => {

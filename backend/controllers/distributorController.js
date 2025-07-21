@@ -64,9 +64,31 @@ const deleteDistributor = async (req, res) => {
   }
 };
 
+const getDistributorDetails = async (req, res) => {
+  try {
+    const { role } = req.user;
+    let { distributor_id } = req.user;
+    if (role === 'super_admin') {
+      distributor_id = req.query.distributor_id;
+      if (!distributor_id) {
+        return res.status(400).json({ error: 'Super admin must select a distributor first.' });
+      }
+    }
+    if (!distributor_id) {
+      return res.status(400).json({ error: 'Missing distributor_id in request.' });
+    }
+    // Example SQL query:
+    // const result = await pool.query('SELECT * FROM distributors WHERE distributor_id = $1', [distributor_id]);
+    // ...rest of your logic...
+  } catch (err) {
+    // ...
+  }
+};
+
 module.exports = {
   getAllDistributors,
   createDistributor,
   updateDistributor,
-  deleteDistributor
+  deleteDistributor,
+  getDistributorDetails
 }; 

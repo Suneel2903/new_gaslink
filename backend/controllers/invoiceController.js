@@ -4,39 +4,60 @@ const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const { getEffectiveUserId } = require('../utils/authUtils');
+const { getAuthToken, generateIRN, generateCreditNoteIRN, cancelIRN } = require('../services/gstService');
 
 // Create invoice from delivered order
 const createInvoiceFromOrder = async (req, res) => {
     const { order_id } = req.params;
-    const { distributor_id } = req.user; // From auth middleware
+    const { role, distributor_id } = req.user; // From auth middleware
     const { issued_by } = req.user; // User creating the invoice
+
+    console.log('[createInvoiceFromOrder] Called for order_id:', order_id);
 
     try {
         // Check if order exists and is delivered
-        const orderQuery = `
-            SELECT o.*, c.credit_period_days, c.grace_period_days
-            FROM orders o
-            JOIN customers c ON o.customer_id = c.customer_id
-            WHERE o.order_id = $1 AND o.distributor_id = $2 AND o.status = 'delivered'
-        `;
-        const orderResult = await db.query(orderQuery, [order_id, distributor_id]);
+        let orderQuery, orderParams;
+        if (role === 'super_admin') {
+            // Super_admin can create invoices for any order
+            orderQuery = `
+                SELECT o.*, c.credit_period_days, c.grace_period_days
+                FROM orders o
+                JOIN customers c ON o.customer_id = c.customer_id
+                WHERE o.order_id = $1 AND o.status = 'delivered'
+            `;
+            orderParams = [order_id];
+        } else {
+            // Regular users can only create invoices for their distributor's orders
+            orderQuery = `
+                SELECT o.*, c.credit_period_days, c.grace_period_days
+                FROM orders o
+                JOIN customers c ON o.customer_id = c.customer_id
+                WHERE o.order_id = $1 AND o.distributor_id = $2 AND o.status = 'delivered'
+            `;
+            orderParams = [order_id, distributor_id];
+        }
+        
+        const orderResult = await db.query(orderQuery, orderParams);
         
         if (orderResult.rows.length === 0) {
+            console.error('[createInvoiceFromOrder] Order not found or not delivered:', order_id);
             return res.status(404).json({ 
                 error: 'Order not found or not delivered' 
             });
         }
 
         const order = orderResult.rows[0];
+        const orderDistributorId = order.distributor_id;
 
         // Check if invoice already exists for this order
         const existingInvoiceQuery = `
             SELECT invoice_id FROM invoices 
             WHERE order_id = $1 AND distributor_id = $2
         `;
-        const existingInvoiceResult = await db.query(existingInvoiceQuery, [order_id, distributor_id]);
+        const existingInvoiceResult = await db.query(existingInvoiceQuery, [order_id, orderDistributorId]);
         
         if (existingInvoiceResult.rows.length > 0) {
+            console.warn('[createInvoiceFromOrder] Invoice already exists for order:', order_id);
             return res.status(400).json({ 
                 error: 'Invoice already exists for this order' 
             });
@@ -56,7 +77,7 @@ const createInvoiceFromOrder = async (req, res) => {
         const orderItemsResult = await db.query(orderItemsQuery, [order_id]);
 
         if (!orderItemsResult.rows.length) {
-            console.error('No order items found for order', order_id);
+            console.error('[createInvoiceFromOrder] No order items found for order', order_id);
             return res.status(400).json({ error: 'Cannot create invoice: no order items found for this order.' });
         }
 
@@ -114,16 +135,25 @@ const createInvoiceFromOrder = async (req, res) => {
         const invoiceQuery = `
             INSERT INTO invoices (
                 distributor_id, customer_id, order_id, invoice_number,
-                issue_date, due_date, total_amount, status, issued_by
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                issue_date, due_date, total_amount, status, einvoice_status, issued_by
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING *
         `;
         const invoiceResult = await db.query(invoiceQuery, [
-            distributor_id, order.customer_id, order_id, invoiceNumber,
-            new Date(), dueDate, totalAmount, 'issued', issued_by
+            orderDistributorId, order.customer_id, order_id, invoiceNumber,
+            new Date(), dueDate, totalAmount, 'draft', 'PENDING', issued_by
         ]);
 
         const invoice = invoiceResult.rows[0];
+
+        // GST API sync intentionally removed from this step.
+        // Use /api/gst/generate/:invoice_id endpoint to trigger GST IRN generation.
+        // const gstResult = await syncWithGSTSite('invoice', invoice);
+        // if (!gstResult.success) {
+        //     await db.query('ROLLBACK');
+        //     return res.status(500).json({ error: 'Failed to sync invoice with GST site', details: gstResult.error });
+        // }
+        // await db.query('UPDATE invoices SET gst_document_url = $1 WHERE invoice_id = $2', [gstResult.gst_url, invoice.invoice_id]);
 
         // Create invoice items with current prices and discounts
         for (const item of orderItemsResult.rows) {
@@ -153,6 +183,7 @@ const createInvoiceFromOrder = async (req, res) => {
         }
 
         await db.query('COMMIT');
+        console.log('[createInvoiceFromOrder] Invoice created successfully for order_id:', order_id);
 
         // Return created invoice with items
         const invoiceWithItemsQuery = `
@@ -187,7 +218,7 @@ const createInvoiceFromOrder = async (req, res) => {
 
     } catch (error) {
         await db.query('ROLLBACK');
-        console.error('Error creating invoice:', error);
+        console.error('[createInvoiceFromOrder] Error creating invoice:', error);
         res.status(500).json({ error: 'Failed to create invoice', details: error.message });
     }
 };
@@ -197,14 +228,17 @@ const getInvoice = async (req, res) => {
     const { id } = req.params;
     const { role, distributor_id } = req.user;
 
+    // Debug context logging
+    console.log('[getInvoice] Called with:', { id, role, distributor_id });
+
     try {
         let query, params;
-        
         if (role === 'super_admin') {
             query = `
-                SELECT i.*, 
+                SELECT i.invoice_id, i.invoice_number, i.issue_date, i.total_amount, i.cgst_value, i.sgst_value, i.igst_value, i.einvoice_status, i.irn, i.ack_no, i.ack_date, i.gst_invoice_json, i.signed_qr_code,
                        c.business_name, c.contact_person, c.phone, c.email,
                        c.address_line1, c.city, c.state, c.postal_code,
+                       o.order_id, o.order_number, o.delivery_date, o.status as order_status,
                        json_agg(
                            json_build_object(
                                'invoice_item_id', ii.invoice_item_id,
@@ -220,16 +254,19 @@ const getInvoice = async (req, res) => {
                 LEFT JOIN customers c ON i.customer_id = c.customer_id
                 LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
                 LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
+                LEFT JOIN orders o ON i.order_id = o.order_id
                 WHERE i.invoice_id = $1 AND i.deleted_at IS NULL
                 GROUP BY i.invoice_id, c.business_name, c.contact_person, c.phone, c.email,
-                         c.address_line1, c.city, c.state, c.postal_code
+                         c.address_line1, c.city, c.state, c.postal_code,
+                         o.order_id, o.order_number, o.delivery_date, o.status
             `;
             params = [id];
         } else {
             query = `
-                SELECT i.*, 
+                SELECT i.invoice_id, i.invoice_number, i.issue_date, i.total_amount, i.cgst_value, i.sgst_value, i.igst_value, i.einvoice_status, i.irn, i.ack_no, i.ack_date, i.gst_invoice_json, i.signed_qr_code,
                        c.business_name, c.contact_person, c.phone, c.email,
                        c.address_line1, c.city, c.state, c.postal_code,
+                       o.order_id, o.order_number, o.delivery_date, o.status as order_status,
                        json_agg(
                            json_build_object(
                                'invoice_item_id', ii.invoice_item_id,
@@ -245,31 +282,107 @@ const getInvoice = async (req, res) => {
                 LEFT JOIN customers c ON i.customer_id = c.customer_id
                 LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
                 LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
+                LEFT JOIN orders o ON i.order_id = o.order_id
                 WHERE i.invoice_id = $1 AND i.distributor_id = $2 AND i.deleted_at IS NULL
                 GROUP BY i.invoice_id, c.business_name, c.contact_person, c.phone, c.email,
-                         c.address_line1, c.city, c.state, c.postal_code
+                         c.address_line1, c.city, c.state, c.postal_code,
+                         o.order_id, o.order_number, o.delivery_date, o.status
             `;
             params = [id, distributor_id];
         }
-        
+        console.log('[getInvoice] Query:', query);
+        console.log('[getInvoice] Params:', params);
         const result = await db.query(query, params);
-        
+        console.log('[getInvoice] Result length:', result.rows.length);
         if (result.rows.length === 0) {
+            console.log('[getInvoice] No invoice found for id:', id);
             return res.status(404).json({ error: 'Invoice not found' });
         }
-
         const invoice = result.rows[0];
-
         if (!invoice.items || !Array.isArray(invoice.items) || (invoice.items.length === 1 && invoice.items[0] === null)) {
             invoice.items = [];
         }
-
         res.json({ invoice: invoice });
-
     } catch (error) {
-        console.error('Error fetching invoice:', error);
+        console.error('[getInvoice] Error fetching invoice:', error, error.stack);
         res.status(500).json({ error: 'Failed to fetch invoice' });
     }
+};
+
+// Add getInvoiceByOrderId
+const getInvoiceByOrderId = async (req, res) => {
+  const { order_id } = req.params;
+  try {
+    const query = `
+      SELECT i.*, 
+             json_agg(
+               json_build_object(
+                 'invoice_item_id', ii.invoice_item_id,
+                 'cylinder_type_id', ii.cylinder_type_id,
+                 'quantity', ii.quantity,
+                 'unit_price', ii.unit_price,
+                 'discount_per_unit', ii.discount_per_unit,
+                 'total_price', ii.total_price,
+                 'cylinder_type_name', ct.name
+               )
+             ) as items
+      FROM invoices i
+      LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
+      LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
+      WHERE i.order_id = $1 AND i.deleted_at IS NULL
+      GROUP BY i.invoice_id
+    `;
+    const result = await db.query(query, [order_id]);
+    if (!result.rows.length) {
+      return res.status(404).json({ error: 'Invoice not found for this order' });
+    }
+    const invoice = result.rows[0];
+    if (!invoice.items || !Array.isArray(invoice.items) || (invoice.items.length === 1 && invoice.items[0] === null)) {
+      invoice.items = [];
+    }
+    res.json({ invoice });
+  } catch (error) {
+    console.error('Error fetching invoice by order_id:', error);
+    res.status(500).json({ error: 'Failed to fetch invoice', details: error.message });
+  }
+};
+
+// Add getInvoiceById
+const getInvoiceById = async (req, res) => {
+  const { invoice_id } = req.params;
+  try {
+    const query = `
+      SELECT i.*, 
+             json_agg(
+               json_build_object(
+                 'invoice_item_id', ii.invoice_item_id,
+                 'cylinder_type_id', ii.cylinder_type_id,
+                 'quantity', ii.quantity,
+                 'unit_price', ii.unit_price,
+                 'discount_per_unit', ii.discount_per_unit,
+                 'total_price', ii.total_price,
+                 'cylinder_type_name', ct.name
+               )
+             ) as items
+      FROM invoices i
+      LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
+      LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
+      WHERE i.invoice_id = $1 AND i.deleted_at IS NULL
+      GROUP BY i.invoice_id
+    `;
+    const result = await db.query(query, [invoice_id]);
+    if (!result.rows.length) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    const invoice = result.rows[0];
+    if (!invoice.items || !Array.isArray(invoice.items) || (invoice.items.length === 1 && invoice.items[0] === null)) {
+      invoice.items = [];
+    }
+    res.json({ invoice });
+  } catch (error) {
+    console.error('Error fetching invoice by invoice_id:', error);
+    res.status(500).json({ error: 'Failed to fetch invoice', details: error.message });
+  }
 };
 
 // Utility to parse disputed_quantities
@@ -438,6 +551,15 @@ const issueCreditNote = async (req, res) => {
             RETURNING *
         `;
         const creditNoteResult = await db.query(creditNoteQuery, [id, amount, reason, userId]);
+
+        // GST API sync
+        const gstResult = await syncWithGSTSite('credit_note', creditNoteResult.rows[0]);
+        if (!gstResult.success) {
+            await db.query('ROLLBACK');
+            return res.status(500).json({ error: 'Failed to sync credit note with GST site', details: gstResult.error });
+        }
+        // Store GST document URL/reference
+        await db.query('UPDATE credit_notes SET gst_document_url = $1 WHERE credit_note_id = $2', [gstResult.gst_url, creditNoteResult.rows[0].credit_note_id]);
 
         // Update invoice status to pending_approval
         const updateInvoiceStatusQuery2 = `
@@ -616,21 +738,28 @@ const updateInvoiceStatuses = async (req, res) => {
 
 // Get all invoices for distributor
 const getAllInvoices = async (req, res) => {
-    const { role, distributor_id } = req.user;
-    const { status, customer_id, page = 1, limit = 10 } = req.query;
-
     try {
-        let whereClause = '';
-        let params = [];
-        let paramCount = 0;
-
+        const { role } = req.user;
+        let { distributor_id } = req.user;
         if (role === 'super_admin') {
-            whereClause = 'WHERE 1=1';
-        } else {
-            paramCount++;
-            whereClause = 'WHERE i.distributor_id = $1';
-            params.push(distributor_id);
+            distributor_id = req.query.distributor_id;
+            if (!distributor_id) {
+                return res.status(400).json({ error: 'Super admin must select a distributor first.' });
+            }
         }
+        // Only check for missing distributor_id
+        if (!distributor_id) {
+            return res.status(400).json({ error: 'Invalid distributor_id in request.' });
+        }
+        const { status, customer_id, page = 1, limit = 10 } = req.query;
+
+        let whereClause = '';
+        let paramCount = 0;
+        let params = [];
+
+        paramCount++;
+        whereClause = 'WHERE i.distributor_id = $1';
+        params.push(distributor_id);
 
         if (status) {
             paramCount++;
@@ -657,6 +786,8 @@ const getAllInvoices = async (req, res) => {
         const offset = (page - 1) * limit;
         paramCount++;
         let query;
+        // Always append limit and offset to params
+        params.push(limit, offset);
         if (role === 'super_admin') {
             query = `
                 SELECT i.*, 
@@ -668,14 +799,25 @@ const getAllInvoices = async (req, res) => {
                        (i.total_amount - COALESCE(
                            (SELECT SUM(amount) FROM credit_notes WHERE invoice_id = i.invoice_id),
                            0
-                       )) as outstanding_amount
+                       )) as outstanding_amount,
+                       json_agg(
+                         json_build_object(
+                           'invoice_item_id', ii.invoice_item_id,
+                           'cylinder_type_id', ii.cylinder_type_id,
+                           'quantity', ii.quantity,
+                           'unit_price', ii.unit_price,
+                           'discount_per_unit', ii.discount_per_unit,
+                           'total_price', ii.total_price
+                         )
+                       ) as items
                 FROM invoices i
                 LEFT JOIN customers c ON i.customer_id = c.customer_id
+                LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
                 ${whereClause}
+                GROUP BY i.invoice_id, c.business_name, c.contact_person
                 ORDER BY i.created_at DESC
-                LIMIT $1 OFFSET $2
+                LIMIT $${paramCount} OFFSET $${paramCount + 1}
             `;
-            params = [limit, offset];
         } else {
             query = `
                 SELECT i.*, 
@@ -687,14 +829,25 @@ const getAllInvoices = async (req, res) => {
                        (i.total_amount - COALESCE(
                            (SELECT SUM(amount) FROM credit_notes WHERE invoice_id = i.invoice_id),
                            0
-                       )) as outstanding_amount
+                       )) as outstanding_amount,
+                       json_agg(
+                         json_build_object(
+                           'invoice_item_id', ii.invoice_item_id,
+                           'cylinder_type_id', ii.cylinder_type_id,
+                           'quantity', ii.quantity,
+                           'unit_price', ii.unit_price,
+                           'discount_per_unit', ii.discount_per_unit,
+                           'total_price', ii.total_price
+                         )
+                       ) as items
                 FROM invoices i
                 LEFT JOIN customers c ON i.customer_id = c.customer_id
+                LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
                 ${whereClause}
+                GROUP BY i.invoice_id, c.business_name, c.contact_person
                 ORDER BY i.created_at DESC
                 LIMIT $${paramCount} OFFSET $${paramCount + 1}
             `;
-            params.push(limit, offset);
         }
 
         const result = await db.query(query, params);
@@ -857,146 +1010,15 @@ const downloadInvoicePdf = async (req, res) => {
     doc.text(customer.address, 40, custY + 30);
     doc.text(`GSTIN: ${customer.gstin}`, 40, custY + 45);
     doc.text(`Contact: ${customer.contact}`, 40, custY + 60);
-    doc.text(`Phone: ${customer.phone}`, 40, custY + 75);
-    doc.text(`Email: ${customer.email}`, 40, custY + 90);
-    // --- Table Header ---
-    let tableTop = custY + 115;
-    doc.rect(40, tableTop - 5, 510, 25).fillAndStroke('#f1f2f6', '#aaa');
-    doc.fontSize(11).fillColor('#222f3e').font('Helvetica-Bold');
-    const colX = [45, 155, 240, 340, 440];
-    doc.text('Cylinder Type', colX[0], tableTop, { width: colX[1] - colX[0] });
-    doc.text('Qty', colX[1], tableTop, { width: colX[2] - colX[1], align: 'right' });
-    doc.text('Unit Price', colX[2], tableTop, { width: colX[3] - colX[2], align: 'right' });
-    doc.text('Discount', colX[3], tableTop, { width: colX[4] - colX[3], align: 'right' });
-    doc.text('Total', colX[4], tableTop, { width: 70, align: 'right' });
-    // --- Table Rows ---
-    doc.fontSize(10).fillColor('black').font('Helvetica');
-    let y = tableTop + 20;
-    invoice.items.forEach((item, idx) => {
-      if (idx % 2 === 1) {
-        doc.rect(40, y - 2, 510, 18).fill('#f8f9fa');
-        doc.fillColor('black');
-      }
-      doc.text(item.cylinder_type_name, colX[0], y, { width: colX[1] - colX[0] });
-      doc.text(item.quantity, colX[1], y, { width: colX[2] - colX[1], align: 'right' });
-      doc.text(`₹${Number(item.unit_price).toFixed(2)}`, colX[2], y, { width: colX[3] - colX[2], align: 'right' });
-      doc.text(`₹${Number(item.discount_per_unit).toFixed(2)}`, colX[3], y, { width: colX[4] - colX[3], align: 'right' });
-      doc.text(`₹${Number(item.total_price).toFixed(2)}`, colX[4], y, { width: 70, align: 'right' });
-      y += 18;
-    });
-    // Table border
-    doc.rect(40, tableTop - 5, 510, y - tableTop + 5).stroke('#aaa');
-    // --- Totals Box ---
-    let totalsY = y + 10;
-    doc.rect(320, totalsY, 230, 70).fillAndStroke('#f1f2f6', '#aaa');
-    let tY = totalsY + 8;
-    doc.fontSize(11).fillColor('#222f3e').font('Helvetica-Bold').text('Subtotal:', 330, tY, { width: 100, align: 'right' });
-    doc.font('Helvetica').fillColor('black').fontSize(10).text(`₹${subtotal.toFixed(2)}`, 440, tY, { width: 100, align: 'right' });
-    tY += 15;
-    doc.font('Helvetica-Bold').fillColor('#222f3e').fontSize(11).text('Total Discount:', 330, tY, { width: 100, align: 'right' });
-    doc.font('Helvetica').fillColor('black').fontSize(10).text(`₹${totalDiscount.toFixed(2)}`, 440, tY, { width: 100, align: 'right' });
-    tY += 15;
-    doc.font('Helvetica-Bold').fillColor('#222f3e').fontSize(11).text('GST (18%):', 330, tY, { width: 100, align: 'right' });
-    doc.font('Helvetica').fillColor('black').fontSize(10).text(`₹${tax.toFixed(2)}`, 440, tY, { width: 100, align: 'right' });
-    tY += 15;
-    doc.font('Helvetica-Bold').fillColor('#0a3d62').fontSize(12).text('Grand Total:', 330, tY, { width: 100, align: 'right' });
-    doc.font('Helvetica-Bold').fillColor('#0a3d62').fontSize(12).text(`₹${grandTotal.toFixed(2)}`, 440, tY, { width: 100, align: 'right' });
-    // --- Footer ---
-    doc.moveTo(40, tY + 30).lineTo(550, tY + 30).strokeColor('#aaa').stroke();
-    doc.fontSize(10).fillColor('gray').font('Helvetica').text('Thank you for your business!', 40, tY + 40, { align: 'center', width: 510 });
-    doc.text('Please make payment within the due date. For queries, contact support@gaslink.com', 40, tY + 55, { align: 'center', width: 510 });
-    doc.text('This is a system-generated invoice and does not require a signature.', 40, tY + 70, { align: 'center', width: 510 });
+    // Add any additional PDF content here as needed
     doc.end();
-    doc.on('end', () => {
-      console.log(`PDF for invoice ${meta.number} fully written.`);
-    });
-    res.on('close', () => {
-      console.log(`Response closed for invoice PDF ${meta.number}`);
-    });
   } catch (error) {
     console.error('Error generating invoice PDF:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Failed to generate invoice PDF' });
-    }
+    res.status(500).json({ error: 'Failed to generate invoice PDF' });
   }
 };
 
-const getInvoiceByOrderId = async (req, res) => {
-  const { order_id } = req.params;
-  try {
-    const query = `
-      SELECT i.*, 
-             json_agg(
-               json_build_object(
-                 'invoice_item_id', ii.invoice_item_id,
-                 'cylinder_type_id', ii.cylinder_type_id,
-                 'quantity', ii.quantity,
-                 'unit_price', ii.unit_price,
-                 'discount_per_unit', ii.discount_per_unit,
-                 'total_price', ii.total_price,
-                 'cylinder_type_name', ct.name
-               )
-             ) as items
-      FROM invoices i
-      LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
-      LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
-      WHERE i.order_id = $1 AND i.deleted_at IS NULL
-      GROUP BY i.invoice_id
-    `;
-    const result = await db.query(query, [order_id]);
-    if (!result.rows.length) {
-      return res.status(404).json({ error: 'Invoice not found for this order' });
-    }
-    const invoice = result.rows[0];
-    if (!invoice.items || !Array.isArray(invoice.items) || (invoice.items.length === 1 && invoice.items[0] === null)) {
-      invoice.items = [];
-    }
-    res.json({ invoice });
-  } catch (error) {
-    console.error('Error fetching invoice by order_id:', error);
-    res.status(500).json({ error: 'Failed to fetch invoice', details: error.message });
-  }
-};
-
-// Fetch invoice by invoice_id
-const getInvoiceById = async (req, res) => {
-  const { invoice_id } = req.params;
-  try {
-    const query = `
-      SELECT i.*, 
-             json_agg(
-               json_build_object(
-                 'invoice_item_id', ii.invoice_item_id,
-                 'cylinder_type_id', ii.cylinder_type_id,
-                 'quantity', ii.quantity,
-                 'unit_price', ii.unit_price,
-                 'discount_per_unit', ii.discount_per_unit,
-                 'total_price', ii.total_price,
-                 'cylinder_type_name', ct.name
-               )
-             ) as items
-      FROM invoices i
-      LEFT JOIN invoice_items ii ON i.invoice_id = ii.invoice_id
-      LEFT JOIN cylinder_types ct ON ii.cylinder_type_id = ct.cylinder_type_id
-      WHERE i.invoice_id = $1 AND i.deleted_at IS NULL
-      GROUP BY i.invoice_id
-    `;
-    const result = await db.query(query, [invoice_id]);
-    if (!result.rows.length) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-    const invoice = result.rows[0];
-    if (!invoice.items || !Array.isArray(invoice.items) || (invoice.items.length === 1 && invoice.items[0] === null)) {
-      invoice.items = [];
-    }
-    res.json({ invoice });
-  } catch (error) {
-    console.error('Error fetching invoice by invoice_id:', error);
-    res.status(500).json({ error: 'Failed to fetch invoice', details: error.message });
-  }
-};
-
-// Batch check invoices for multiple order_ids
+// Add checkMultipleInvoices
 const checkMultipleInvoices = async (req, res) => {
   const { order_ids } = req.body;
   const { role, distributor_id } = req.user;
@@ -1006,35 +1028,210 @@ const checkMultipleInvoices = async (req, res) => {
   }
 
   try {
-    let query, params;
+    // First, get order statuses to determine if they can generate invoices
+    let orderQuery, orderParams;
     if (role === 'super_admin') {
-      query = `
+      orderQuery = `
+        SELECT order_id, status
+        FROM orders
+        WHERE order_id = ANY($1)
+      `;
+      orderParams = [order_ids];
+    } else {
+      orderQuery = `
+        SELECT order_id, status
+        FROM orders
+        WHERE order_id = ANY($1) AND distributor_id = $2
+      `;
+      orderParams = [order_ids, distributor_id];
+    }
+    const orderResult = await db.query(orderQuery, orderParams);
+
+    // Create a map of order statuses
+    const orderStatusMap = {};
+    orderResult.rows.forEach(row => {
+      orderStatusMap[row.order_id] = row.status;
+    });
+
+    // Then, get existing invoices
+    let invoiceQuery, invoiceParams;
+    if (role === 'super_admin') {
+      invoiceQuery = `
         SELECT order_id, invoice_id, status
         FROM invoices
         WHERE order_id = ANY($1) AND deleted_at IS NULL
       `;
-      params = [order_ids];
+      invoiceParams = [order_ids];
     } else {
-      query = `
+      invoiceQuery = `
         SELECT order_id, invoice_id, status
         FROM invoices
         WHERE order_id = ANY($1) AND distributor_id = $2 AND deleted_at IS NULL
       `;
-      params = [order_ids, distributor_id];
+      invoiceParams = [order_ids, distributor_id];
     }
-    const result = await db.query(query, params);
-    // Map order_id to invoice info
+    const invoiceResult = await db.query(invoiceQuery, invoiceParams);
+
+    // Create a map of existing invoices
+    const invoiceMap = {};
+    invoiceResult.rows.forEach(row => {
+      invoiceMap[row.order_id] = { invoice_id: row.invoice_id, status: row.status };
+    });
+
+    // Build the response with proper structure
     const map = {};
-    for (const oid of order_ids) {
-      map[oid] = null;
+    for (const orderId of order_ids) {
+      const orderStatus = orderStatusMap[orderId];
+      const existingInvoice = invoiceMap[orderId];
+
+      if (existingInvoice) {
+        // Invoice already exists
+        map[orderId] = {
+          can_generate: false,
+          order_status: orderStatus || 'unknown',
+          existing_invoice: existingInvoice.invoice_id,
+          message: 'Invoice already exists'
+        };
+      } else if (orderStatus === 'delivered' || orderStatus === 'modified delivered') {
+        // Can generate invoice
+        map[orderId] = {
+          can_generate: true,
+          order_status: orderStatus,
+          existing_invoice: null,
+          message: 'Ready to generate invoice'
+        };
+      } else {
+        // Cannot generate invoice
+        map[orderId] = {
+          can_generate: false,
+          order_status: orderStatus || 'unknown',
+          existing_invoice: null,
+          message: `Order must be delivered to generate invoice (current status: ${orderStatus || 'unknown'})`
+        };
+      }
     }
-    for (const row of result.rows) {
-      map[row.order_id] = { invoice_id: row.invoice_id, status: row.status };
-    }
+
     res.json(map);
   } catch (error) {
     console.error('Error in checkMultipleInvoices:', error);
     res.status(500).json({ error: 'Failed to check invoices', details: error.message });
+  }
+};
+
+// Credit Note Request
+const creditNoteRequest = async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+  const userId = req.user.user_id || req.user.firebase_uid;
+  try {
+    await db.query(
+      `UPDATE invoices SET status = 'pending_approval', credit_note_rejection_reason = NULL WHERE invoice_id = $1`,
+      [id]
+    );
+    // Optionally log the request reason somewhere
+    res.json({ success: true, message: 'Credit note request submitted' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to submit credit note request', details: err.message });
+  }
+};
+
+// Cancel Request
+const cancelRequest = async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+  const userId = req.user.user_id || req.user.firebase_uid;
+  try {
+    await db.query(
+      `UPDATE invoices SET status = 'pending_approval', cancel_rejection_reason = NULL WHERE invoice_id = $1`,
+      [id]
+    );
+    // Optionally log the request reason somewhere
+    res.json({ success: true, message: 'Cancel request submitted' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to submit cancel request', details: err.message });
+  }
+};
+
+// Approve Credit Note
+const approveCreditNote = async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.user_id || req.user.firebase_uid;
+  const now = new Date();
+  try {
+    // Call GST credit note IRN generation
+    const gstResult = await generateCreditNoteIRN(id);
+    if (gstResult.success) {
+      await db.query(
+        `UPDATE invoices SET status = 'credit_note_issued', einvoice_status = 'CREDIT_NOTE_SUCCESS', closed_at = $1, closed_by = $2, credit_note_rejection_reason = NULL WHERE invoice_id = $3`,
+        [now, userId, id]
+      );
+      res.json({ success: true, message: 'Credit note approved and GST IRN generated' });
+    } else {
+      await db.query(
+        `UPDATE invoices SET einvoice_status = 'FAILED', gst_error_message = $1 WHERE invoice_id = $2`,
+        [gstResult.error, id]
+      );
+      res.status(500).json({ error: 'Failed to generate GST IRN for credit note', details: gstResult.error });
+    }
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to approve credit note', details: err.message });
+  }
+};
+
+// Reject Credit Note
+const rejectCreditNote = async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+  try {
+    await db.query(
+      `UPDATE invoices SET status = 'issued', credit_note_rejection_reason = $1 WHERE invoice_id = $2`,
+      [reason, id]
+    );
+    res.json({ success: true, message: 'Credit note rejected' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to reject credit note', details: err.message });
+  }
+};
+
+// Approve Cancel
+const approveCancel = async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.user_id || req.user.firebase_uid;
+  const now = new Date();
+  const { reason } = req.body;
+  try {
+    // Call GST IRN cancel API
+    const gstResult = await cancelIRN(id, reason);
+    if (gstResult.success) {
+      await db.query(
+        `UPDATE invoices SET status = 'cancelled', einvoice_status = 'CANCELLED', closed_at = $1, closed_by = $2, cancel_rejection_reason = NULL WHERE invoice_id = $3`,
+        [now, userId, id]
+      );
+      res.json({ success: true, message: 'Invoice cancelled and GST IRN cancelled' });
+    } else {
+      await db.query(
+        `UPDATE invoices SET gst_error_message = $1 WHERE invoice_id = $2`,
+        [gstResult.error, id]
+      );
+      res.status(500).json({ error: 'Failed to cancel GST IRN', details: gstResult.error });
+    }
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to approve cancel', details: err.message });
+  }
+};
+
+// Reject Cancel
+const rejectCancel = async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+  try {
+    await db.query(
+      `UPDATE invoices SET status = 'issued', cancel_rejection_reason = $1 WHERE invoice_id = $2`,
+      [reason, id]
+    );
+    res.json({ success: true, message: 'Cancel request rejected' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to reject cancel', details: err.message });
   }
 };
 
@@ -1049,5 +1246,11 @@ module.exports = {
   downloadInvoicePdf,
   getInvoiceByOrderId,
   getInvoiceById,
-  checkMultipleInvoices
-}; 
+  checkMultipleInvoices,
+  creditNoteRequest,
+  cancelRequest,
+  approveCreditNote,
+  rejectCreditNote,
+  approveCancel,
+  rejectCancel
+};

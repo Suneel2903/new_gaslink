@@ -1,11 +1,11 @@
 const express = require('express');
 const { getInventorySummary, upsertInventorySummary, approveInventoryAdjustment, updateFromDelivery, listReplenishments, updateReplenishmentStatus, confirmReturn, getCustomerInventorySummary, getUnaccountedSummary, lockSummary, unlockSummary, adminOverrideBalance, getInventoryHistory } = require('../controllers/inventoryController.js');
-const { authenticateUser } = require('../middleware/auth.js');
+const { verifyFirebaseToken } = require('../middleware/auth.js');
 const { checkRole } = require('../middleware/checkRole.js');
 
 const router = express.Router();
 
-router.use(authenticateUser);
+router.use(verifyFirebaseToken);
 
 // Allowed Roles per module:
 // Inventory Fulfillment: super_admin, inventory, distributor_admin
@@ -24,5 +24,10 @@ router.patch('/lock-summary/:date', checkRole(['super_admin', 'inventory', 'dist
 router.patch('/unlock-summary/:date', checkRole(['super_admin', 'inventory', 'distributor_admin']), unlockSummary);
 router.patch('/admin-override-balance', checkRole(['super_admin', 'inventory', 'distributor_admin']), adminOverrideBalance);
 router.get('/history/:customer_id/:cylinder_type_id', checkRole(['super_admin', 'inventory', 'distributor_admin']), getInventoryHistory);
+router.get('/customer-delivery-history/:customer_id/:cylinder_type_id', checkRole(['super_admin', 'inventory', 'distributor_admin']), require('../controllers/inventoryController').getCustomerDeliveryHistory);
+
+// Add new route for logging inventory unaccounted
+router.post('/unaccounted-log', require('../controllers/inventoryController').logInventoryUnaccounted);
+router.get('/unaccounted-log', require('../controllers/inventoryController').getInventoryUnaccountedLog);
 
 module.exports = router; 

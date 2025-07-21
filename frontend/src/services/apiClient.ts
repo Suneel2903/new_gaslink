@@ -1,116 +1,108 @@
-import axios from 'axios';
-import type { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
+import axiosInstance from './axiosInstance';
+import type {
+  ApiResponse,
+  User,
+  UserProfile,
+  CreateUserRequest,
+  UpdateUserRequest,
+  Order,
+  CreateOrderRequest,
+  UpdateOrderRequest,
+  OrderStatusChangeRequest,
+  InventorySummary,
+  InventoryUpdateFromDeliveryRequest,
+  ConfirmReturnRequest,
+  Customer,
+  CreateCustomerRequest,
+  UpdateCustomerRequest,
+  CylinderType,
+  CreateCylinderPriceRequest,
+  DashboardStats,
+  RecentOrder,
+  PendingAction,
+  PendingActionsResponse,
+  Payment,
+  CreatePaymentRequest,
+  OutstandingInvoice
+} from '../types';
 
-// Create axios instance with base configuration
-const apiClient: AxiosInstance = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api',
-  timeout: 10000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
-
-// Request interceptor to add auth token
-apiClient.interceptors.request.use(
-  async (config) => {
-    const authToken = localStorage.getItem('authToken');
-    if (authToken) {
-      config.headers.Authorization = `Bearer ${authToken}`;
-    }
-    return config;
-  },
-  (error) => Promise.reject(error)
-);
-
-// Response interceptor for error handling
-apiClient.interceptors.response.use(
-  (response: AxiosResponse) => {
-    return response;
-  },
-  (error: AxiosError) => {
-    // Temporarily comment out redirect to login on 401 for debugging
-    // if (error.response?.status === 401) {
-    //   localStorage.removeItem('authToken');
-    //   window.location.href = '/login';
-    // }
-    return Promise.reject(error);
-  }
-);
+// Use shared axiosInstance for all API calls
+const apiClient = axiosInstance;
 
 // API endpoints
 export const api = {
   // Auth endpoints
   auth: {
     login: (email: string, password: string) => 
-      apiClient.post('/auth/login', { email, password }),
-    register: (userData: any) => 
-      apiClient.post('/auth/register', userData),
+      apiClient.post<ApiResponse<{ token: string; user: UserProfile }>>('/auth/login', { email, password }),
+    register: (userData: CreateUserRequest) => 
+      apiClient.post<ApiResponse<User>>('/auth/register', userData),
     verifyToken: () => 
-      apiClient.get('/auth/verify'),
+      apiClient.get<ApiResponse<UserProfile>>('/auth/verify'),
   },
 
   // Users endpoints
   users: {
-    getAll: (distributorId?: string) => 
-      apiClient.get('/users', { params: { distributorId } }),
+    getAll: (distributor_id?: string) => 
+      apiClient.get<ApiResponse<User[]>>('/users', { params: { distributor_id } }),
     getById: (id: string) => 
-      apiClient.get(`/users/${id}`),
-    create: (userData: any) => 
-      apiClient.post('/users', userData),
-    update: (id: string, userData: any) => 
-      apiClient.put(`/users/${id}`, userData),
+      apiClient.get<ApiResponse<User>>(`/users/${id}`),
+    create: (userData: CreateUserRequest) => 
+      apiClient.post<ApiResponse<User>>('/users', userData),
+    update: (id: string, userData: UpdateUserRequest) => 
+      apiClient.put<ApiResponse<User>>(`/users/${id}`, userData),
     delete: (id: string) => 
-      apiClient.delete(`/users/${id}`),
+      apiClient.delete<ApiResponse<{ message: string }>>(`/users/${id}`),
     getProfile: () => 
-      apiClient.get('/users/profile/me'),
-    updateProfile: (userData: any) => 
-      apiClient.put('/users/profile/me', userData),
+      apiClient.get<ApiResponse<UserProfile>>('/users/profile/me'),
+    updateProfile: (userData: UpdateUserRequest) => 
+      apiClient.put<ApiResponse<UserProfile>>('/users/profile/me', userData),
   },
 
   // Orders endpoints
   orders: {
-    getAll: (distributorId?: string, status?: string) => 
-      apiClient.get('/orders', { params: { distributorId, status } }),
+    getAll: (distributor_id?: string, status?: string) => 
+      apiClient.get<ApiResponse<Order[]>>('/orders', { params: { distributor_id, status } }),
     getById: (id: string) => 
-      apiClient.get(`/orders/${id}`),
-    create: (orderData: any) => 
-      apiClient.post('/orders', orderData),
-    update: (id: string, orderData: any) => 
-      apiClient.put(`/orders/${id}`, orderData),
+      apiClient.get<ApiResponse<Order>>(`/orders/${id}`),
+    create: (orderData: CreateOrderRequest) => 
+      apiClient.post<ApiResponse<Order>>('/orders', orderData),
+    update: (id: string, orderData: UpdateOrderRequest) => 
+      apiClient.put<ApiResponse<Order>>(`/orders/${id}`, orderData),
     delete: (id: string) => 
-      apiClient.delete(`/orders/${id}`),
-    changeStatus: (id: string, status: string, payload?: any) => 
-      apiClient.patch(`/orders/${id}/status`, { status, ...(payload || {}) }),
+      apiClient.delete<ApiResponse<{ message: string }>>(`/orders/${id}`),
+    changeStatus: (id: string, status: string, payload?: OrderStatusChangeRequest) => 
+      apiClient.patch<ApiResponse<Order>>(`/orders/${id}/status`, { status, ...(payload || {}) }),
     cancel: (id: string) => 
-      apiClient.patch(`/orders/${id}/cancel`),
+      apiClient.patch<ApiResponse<{ message: string }>>(`/orders/${id}/cancel`),
   },
 
   // Inventory endpoints
   inventory: {
-    getAll: (distributorId?: string) => 
-      apiClient.get('/inventory', { params: { distributorId } }),
+    getAll: (distributor_id?: string) => 
+      apiClient.get<ApiResponse<InventorySummary[]>>('/inventory', { params: { distributor_id } }),
     getById: (id: string) => 
-      apiClient.get(`/inventory/${id}`),
-    create: (inventoryData: any) => 
-      apiClient.post('/inventory', inventoryData),
-    update: (id: string, inventoryData: any) => 
-      apiClient.put(`/inventory/${id}`, inventoryData),
+      apiClient.get<ApiResponse<InventorySummary>>(`/inventory/${id}`),
+    create: (inventoryData: Partial<InventorySummary>) => 
+      apiClient.post<ApiResponse<InventorySummary>>('/inventory', inventoryData),
+    update: (id: string, inventoryData: Partial<InventorySummary>) => 
+      apiClient.put<ApiResponse<InventorySummary>>(`/inventory/${id}`, inventoryData),
     delete: (id: string) => 
-      apiClient.delete(`/inventory/${id}`),
+      apiClient.delete<ApiResponse<{ message: string }>>(`/inventory/${id}`),
     updateStock: (id: string, quantity: number) => 
-      apiClient.patch(`/inventory/${id}/stock`, { quantity }),
-    getSummaryByDate: (date: string) => apiClient.get(`/inventory/summary/${date}`),
-    upsertSummaryByDate: (date: string, updates: any) => apiClient.post(`/inventory/summary/${date}`, { updates }),
-    approveAdjustment: (adjustment_ids: string[], admin_id: string) => apiClient.patch('/inventory/approve-adjustment', { adjustment_ids, admin_id }),
-    updateFromDelivery: (payload: any) => apiClient.post('/inventory/update-from-delivery', payload),
-    getReplenishments: (status?: string) => apiClient.get('/inventory/replenishments', { params: status ? { status } : {} }),
-    updateReplenishment: (id: string, data: any) => apiClient.patch(`/inventory/replenishments/${id}`, data),
-    getPendingAdjustments: (status?: string) => apiClient.get('/inventory/adjustments', { params: status ? { status } : {} }),
-    confirmReturn: (returns: any[]) => apiClient.post('/inventory/confirm-return', { returns }),
-    getCustomerSummary: (customerId: string) => apiClient.get(`/inventory/customer-summary/${customerId}`),
-    getUnaccountedSummary: (date: string) => apiClient.get('/inventory/unaccounted-summary', { params: { date } }),
-    lockSummary: (date: string) => apiClient.patch(`/inventory/lock-summary/${date}`),
-    unlockSummary: (date: string) => apiClient.patch(`/inventory/unlock-summary/${date}`),
+      apiClient.patch<ApiResponse<InventorySummary>>(`/inventory/${id}/stock`, { quantity }),
+    getSummaryByDate: (date: string, distributor_id?: string) => apiClient.get<ApiResponse<InventorySummary[]>>(`/inventory/summary/${date}`, { params: distributor_id ? { distributor_id } : {} }),
+    upsertSummaryByDate: (date: string, updates: Record<string, unknown>) => apiClient.post<ApiResponse<InventorySummary[]>>(`/inventory/summary/${date}`, { updates }),
+    approveAdjustment: (adjustment_ids: string[], admin_id: string) => apiClient.patch<ApiResponse<{ message: string }>>('/inventory/approve-adjustment', { adjustment_ids, admin_id }),
+    updateFromDelivery: (payload: InventoryUpdateFromDeliveryRequest) => apiClient.post<ApiResponse<{ message: string }>>('/inventory/update-from-delivery', payload),
+    getReplenishments: (status?: string) => apiClient.get<ApiResponse<Array<{ replenishment_id: string; cylinder_type_id: string; quantity: number; status: string; created_at: string }>>>('/inventory/replenishments', { params: status ? { status } : {} }),
+    updateReplenishment: (id: string, data: { status: string; approved_by?: string }) => apiClient.patch<ApiResponse<{ message: string }>>(`/inventory/replenishments/${id}`, data),
+    getPendingAdjustments: (status?: string) => apiClient.get<ApiResponse<Array<{ adjustment_id: string; cylinder_type_id: string; quantity: number; reason: string; status: string; created_at: string }>>>('/inventory/adjustments', { params: status ? { status } : {} }),
+    confirmReturn: (returns: ConfirmReturnRequest['returns']) => apiClient.post<ApiResponse<{ message: string }>>('/inventory/confirm-return', { returns }),
+    getCustomerSummary: (customerId: string) => apiClient.get<ApiResponse<Array<{ customer_id: string; cylinder_type_id: string; cylinder_type_name: string; with_customer_qty: number; pending_returns: number; missing_qty: number; last_updated: string }>>>(`/inventory/customer-summary/${customerId}`),
+    getUnaccountedSummary: (date: string, distributor_id?: string) => apiClient.get<ApiResponse<Array<{ customer_id: string; customer_name: string; cylinder_type_id: string; cylinder_name: string; with_customer_qty: number; pending_returns: number; missing_qty: number; unaccounted: number; date: string }>>>('/inventory/unaccounted-summary', { params: { date, distributor_id } }),
+    lockSummary: (date: string) => apiClient.patch<ApiResponse<{ message: string }>>(`/inventory/lock-summary/${date}`),
+    unlockSummary: (date: string) => apiClient.patch<ApiResponse<{ message: string }>>(`/inventory/unlock-summary/${date}`),
     adminOverrideBalance: (data: {
       customer_id: string;
       cylinder_type_id: string;
@@ -118,43 +110,100 @@ export const api = {
       pending_returns: number;
       missing_qty: number;
       reason: string;
-    }) => apiClient.patch('/inventory/admin-override-balance', data),
+    }) => apiClient.patch<ApiResponse<{ message: string }>>('/inventory/admin-override-balance', data),
+    logUnaccounted: (data: { date: string; distributor_id: string; cylinder_type_id: string; count: number; reason: string; responsible_party: string; responsible_role: string }) =>
+      apiClient.post<ApiResponse<{ success: boolean }>>('/inventory/unaccounted-log', data),
+    getUnaccountedLog: (date: string, distributor_id: string, cylinder_type_id: string) =>
+      apiClient.get<ApiResponse<Array<{ id: string; count: number; reason: string; responsible_party: string; responsible_role: string; created_at: string }>>>(
+        '/inventory/unaccounted-log', { params: { date, distributor_id, cylinder_type_id } }),
   },
 
   // Dashboard endpoints
   dashboard: {
-    getStats: (distributorId?: string) => 
-      apiClient.get('/dashboard/stats', { params: { distributorId } }),
-    getRecentOrders: (distributorId?: string) => 
-      apiClient.get('/dashboard/recent-orders', { params: { distributorId } }),
-    getPendingActions: (distributorId?: string) => 
-      apiClient.get('/dashboard/pending-actions', { params: { distributorId } }),
+    getStats: (distributor_id: string) => 
+      apiClient.get<ApiResponse<DashboardStats>>(`/dashboard/stats/${distributor_id}`),
+    getRecentOrders: (distributor_id?: string) => 
+      apiClient.get<ApiResponse<RecentOrder[]>>('/dashboard/recent-orders', { params: { distributor_id } }),
+    getPendingActions: (distributor_id: string, role?: string) => 
+      apiClient.get<ApiResponse<PendingActionsResponse>>(`/dashboard/pending-actions/${distributor_id}`, { params: { role } }),
   },
 
   // Customers endpoints
   customers: {
-    getAll: () => apiClient.get('/customers'),
-    getById: (id: string) => apiClient.get(`/customers/${id}`),
-    create: (customerData: any) => apiClient.post('/customers', customerData),
-    update: (id: string, customerData: any) => apiClient.put(`/customers/${id}`, customerData),
-    delete: (id: string) => apiClient.delete(`/customers/${id}`),
+    getAll: (distributor_id?: string) => apiClient.get<ApiResponse<Customer[]>>('/customers', { params: distributor_id ? { distributor_id } : {} }),
+    getById: (id: string) => apiClient.get<ApiResponse<Customer>>(`/customers/${id}`),
+    create: (customerData: CreateCustomerRequest) => apiClient.post<ApiResponse<Customer>>('/customers', customerData),
+    update: (id: string, customerData: UpdateCustomerRequest) => apiClient.put<ApiResponse<Customer>>(`/customers/${id}`, customerData),
+    delete: (id: string) => apiClient.delete<ApiResponse<{ message: string }>>(`/customers/${id}`),
     setStopSupply: (id: string, stop_supply: boolean, reason?: string) =>
-      apiClient.patch(`/customers/${id}/stop-supply`, { stop_supply, stop_supply_reason: reason }),
+      apiClient.patch<ApiResponse<{ message: string }>>(`/customers/${id}/stop-supply`, { stop_supply, stop_supply_reason: reason }),
     setPreferredDriver: (id: string, driver_id: string) =>
-      apiClient.patch(`/customers/${id}/preferred-driver`, { driver_id }),
-    getDrivers: () => apiClient.get('/users', { params: { role: 'driver' } }),
-    getModificationRequests: () => apiClient.get('/customers/modification/requests'),
+      apiClient.patch<ApiResponse<{ message: string }>>(`/customers/${id}/preferred-driver`, { driver_id }),
+    getDrivers: () => apiClient.get<ApiResponse<User[]>>('/users', { params: { role: 'driver' } }),
+    getModificationRequests: () => apiClient.get<ApiResponse<Array<{ request_id: string; customer_id: string; field_name: string; old_value: string; new_value: string; requested_by: string; status: string; created_at: string }>>>('/customers/modification/requests'),
   },
 
   cylinderTypes: {
-    getAll: () => apiClient.get('/cylinder-types'),
-    updatePrice: (id: string, data: any) => apiClient.patch(`/cylinder-types/${id}/price`, data),
+    getAll: (distributor_id?: string) => {
+      console.log('🚀 cylinderTypes.getAll triggered with:', distributor_id);
+      return apiClient.get<ApiResponse<CylinderType[]>>('/cylinder-types', { params: distributor_id ? { distributor_id } : {} });
+    },
+    updatePrice: (id: string, data: { unit_price: number }) => apiClient.patch<ApiResponse<CylinderType>>(`/cylinder-types/${id}/price`, data),
   },
 
   cylinderPrices: {
-    getLatest: () => apiClient.get('/cylinder-prices/latest'),
-    insert: (data: any) => apiClient.post('/cylinder-prices', data),
-    getByMonthYear: (month: number, year: number) => apiClient.get(`/cylinder-prices/by-month?month=${month}&year=${year}`),
+    getLatest: () => apiClient.get<ApiResponse<Array<{ cylinder_type_id: string; unit_price: number; cylinder_type_name: string }>>>('/cylinder-prices/latest'),
+    insert: (data: CreateCylinderPriceRequest) => apiClient.post<ApiResponse<{ message: string }>>('/cylinder-prices', data),
+    getByMonthYear: (month: number, year: number, distributor_id?: string) =>
+      apiClient.get<ApiResponse<Array<{ price_id: string; cylinder_type_id: string; unit_price: number; effective_from: string; cylinder_type_name: string }>>>(
+        `/cylinder-prices/by-month?month=${month}&year=${year}${distributor_id ? `&distributor_id=${distributor_id}` : ''}`
+      ),
+  },
+
+  // Payments endpoints
+  payments: {
+    getAll: (distributor_id?: string) => 
+      apiClient.get<ApiResponse<Payment[]>>('/payments', { params: { distributor_id } }),
+    getById: (id: string) => 
+      apiClient.get<ApiResponse<Payment>>(`/payments/${id}`),
+    create: (paymentData: CreatePaymentRequest) => 
+      apiClient.post<ApiResponse<Payment>>('/payments', paymentData),
+    update: (id: string, paymentData: Partial<Payment>) => 
+      apiClient.put<ApiResponse<Payment>>(`/payments/${id}`, paymentData),
+    delete: (id: string) => 
+      apiClient.delete<ApiResponse<{ message: string }>>(`/payments/${id}`),
+    getOutstandingInvoices: (customerId: string) => 
+      apiClient.get<ApiResponse<OutstandingInvoice[]>>(`/payments/outstanding/${customerId}`),
+  },
+
+  // Distributors endpoints
+  distributors: {
+    getAll: () => 
+      apiClient.get<ApiResponse<Array<{ id: string; name: string }>>>('/distributors/all'),
+    getById: (id: string) => apiClient.get<ApiResponse<any>>(`/distributors/${id}`),
+    create: (data: any) => apiClient.post<ApiResponse<any>>('/distributors', data),
+    update: (id: string, data: any) => apiClient.put<ApiResponse<any>>(`/distributors/${id}`, data),
+    delete: (id: string) => apiClient.delete<ApiResponse<any>>(`/distributors/${id}`),
+  },
+
+  // Settings endpoints
+  settings: {
+    getDistributorSettings: (distributorId: string) => 
+      apiClient.get<ApiResponse<any>>(`/settings/${distributorId}`),
+    updateDistributorSettings: (distributorId: string, settings: any) => 
+      apiClient.put<ApiResponse<{ message: string }>>(`/settings/${distributorId}`, settings),
+    getDefaultDueDateSettings: () => 
+      apiClient.get<ApiResponse<any>>('/settings/defaults/due-dates')
+  },
+
+  // Vehicle endpoints
+  vehicle: {
+    getCancelledStockInVehicles: (distributorId: string) => 
+      apiClient.get<ApiResponse<VehicleCancelledStock[]>>(`/vehicle/cancelled-stock/${distributorId}`),
+    moveCancelledStockToInventory: (data: { vehicle_id: string; cylinder_type_id: string; quantity: number }) => 
+      apiClient.post<ApiResponse<{ message: string; data: any }>>('/vehicle/cancelled-stock/move', data),
+    getVehicleInventorySummary: (distributorId: string) => 
+      apiClient.get<ApiResponse<VehicleInventorySummary[]>>(`/vehicle/inventory-summary/${distributorId}`),
   },
 };
 

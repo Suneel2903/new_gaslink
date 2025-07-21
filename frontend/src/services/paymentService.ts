@@ -1,59 +1,10 @@
-import { apiClient } from './apiClient';
-
-export interface Payment {
-  payment_id: string;
-  customer_id: string;
-  distributor_id: string;
-  customer_name: string;
-  phone: string;
-  distributor_name: string;
-  amount: number;
-  payment_method: string;
-  payment_reference?: string;
-  allocation_mode: 'auto' | 'manual';
-  received_by_name: string;
-  received_at: string;
-  notes?: string;
-  created_at: string;
-  allocations?: PaymentAllocation[];
-}
-
-export interface PaymentAllocation {
-  allocation_id: string;
-  invoice_id: string;
-  invoice_number: string;
-  total_amount: number;
-  allocated_amount: number;
-  invoice_status: string;
-}
-
-export interface CreatePaymentRequest {
-  customer_id: string;
-  distributor_id: string;
-  amount: number;
-  payment_method: string;
-  payment_reference?: string;
-  allocation_mode: 'auto' | 'manual';
-  notes?: string;
-  allocations?: Array<{ invoice_id: string; allocated_amount: number }>;
-}
-
-export interface OutstandingInvoice {
-  invoice_id: string;
-  invoice_number: string;
-  total_amount: number;
-  allocated_amount: number;
-  outstanding_amount: number;
-  status: string;
-  created_at: string;
-}
-
-export interface PaymentSummary {
-  total_payments: number;
-  total_amount: number;
-  payment_method: string;
-  allocation_mode: string;
-}
+import apiClient from './apiClient';
+import type {
+  Payment,
+  CreatePaymentRequest,
+  OutstandingInvoice,
+  PaymentSummary
+} from '../types';
 
 export const paymentService = {
   // Get all payments

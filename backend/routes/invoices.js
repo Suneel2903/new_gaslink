@@ -1,5 +1,5 @@
 const express = require('express');
-const { authenticateUser } = require('../middleware/auth.js');
+const { verifyFirebaseToken } = require('../middleware/auth.js');
 const { checkRole } = require('../middleware/checkRole.js');
 const { 
     createInvoiceFromOrder, 
@@ -17,7 +17,7 @@ const {
 const router = express.Router();
 
 // Apply auth middleware to all routes
-router.use(authenticateUser);
+router.use(verifyFirebaseToken);
 
 // Allowed Roles per module:
 // Invoices: super_admin, finance, distributor_admin

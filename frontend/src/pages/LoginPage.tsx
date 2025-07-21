@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useAuth } from '../contexts/AuthContext';
+import { loginSchema, type LoginFormData } from '../schemas/loginSchema';
+import type { ApiError } from '../types';
 
 export const LoginPage: React.FC = () => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { login } = useAuth();
@@ -13,16 +15,24 @@ export const LoginPage: React.FC = () => {
 
   const from = location.state?.from?.pathname || '/app/dashboard';
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm<LoginFormData>({
+    resolver: zodResolver(loginSchema),
+  });
+
+  const onSubmit = async (data: LoginFormData) => {
     setLoading(true);
     setError('');
 
     try {
-      await login(email, password);
+      await login(data.email, data.password);
       navigate(from, { replace: true });
-    } catch (error: any) {
-      setError(error.message || 'Failed to login');
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      setError(apiError.message || 'Failed to login');
     } finally {
       setLoading(false);
     }
@@ -42,8 +52,9 @@ export const LoginPage: React.FC = () => {
       const { email, password } = demoAccounts[demoType];
       await login(email, password);
       navigate(from, { replace: true });
-    } catch (error: any) {
-      setError('Demo login failed. Please use manual login.');
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      setError(apiError.message || 'Demo login failed. Please use manual login.');
     } finally {
       setLoading(false);
     }
@@ -64,7 +75,7 @@ export const LoginPage: React.FC = () => {
           </p>
         </div>
 
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+        <form className="mt-8 space-y-6" onSubmit={handleSubmit(onSubmit)}>
           <div className="space-y-4">
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -72,15 +83,15 @@ export const LoginPage: React.FC = () => {
               </label>
               <input
                 id="email"
-                name="email"
                 type="email"
                 autoComplete="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="input-field mt-1"
+                {...register('email')}
+                className={`input-field mt-1 ${errors.email ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''}`}
                 placeholder="Enter your email"
               />
+              {errors.email && (
+                <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.email.message}</p>
+              )}
             </div>
 
             <div>
@@ -89,15 +100,15 @@ export const LoginPage: React.FC = () => {
               </label>
               <input
                 id="password"
-                name="password"
                 type="password"
                 autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="input-field mt-1"
+                {...register('password')}
+                className={`input-field mt-1 ${errors.password ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''}`}
                 placeholder="Enter your password"
               />
+              {errors.password && (
+                <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.password.message}</p>
+              )}
             </div>
           </div>
 
@@ -162,7 +173,7 @@ export const LoginPage: React.FC = () => {
 
         <div className="text-center">
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            GasLink v1.0.0 - LPG Distribution Management
+            GasLink v1.0.0
           </p>
         </div>
       </div>

@@ -1,5 +1,5 @@
 const express = require('express');
-const { authenticateUser } = require('../middleware/auth.js');
+const { verifyFirebaseToken } = require('../middleware/auth.js');
 const { checkRole } = require('../middleware/checkRole.js');
 const {
   createPayment,
@@ -14,7 +14,7 @@ const {
 
 const router = express.Router();
 
-router.use(authenticateUser);
+router.use(verifyFirebaseToken);
 
 // Allowed Roles per module:
 // Payments: super_admin, finance, distributor_admin

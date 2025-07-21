@@ -1,5 +1,5 @@
 const express = require('express');
-const { authenticateUser } = require('../middleware/auth.js');
+const { verifyFirebaseToken } = require('../middleware/auth.js');
 const { checkRole } = require('../middleware/checkRole.js');
 const {
   getAllUsers,
@@ -13,10 +13,10 @@ const {
 
 const router = express.Router();
 
-// Profile route should be defined before router.use(authenticateUser) to avoid being shadowed
-router.get('/profile/me', authenticateUser, getMyProfile);
+// Profile route should be defined before router.use for other auth
+router.get('/profile/me', verifyFirebaseToken, getMyProfile);
 
-router.use(authenticateUser);
+router.use(verifyFirebaseToken);
 
 // Only super_admin can manage users, distributor_admin can view
 router.get('/', checkRole(['super_admin', 'distributor_admin']), getAllUsers);
