@@ -79,7 +79,7 @@ class InvoiceService {
   async fetchInvoiceByOrderId(order_id: string): Promise<Invoice> {
     const token = await auth.currentUser?.getIdToken(true);
     const response = await axiosInstance.get(
-      `${import.meta.env['VITE_API_BASE_URL']}/invoices/from-order/${order_id}`,
+      `/invoices/from-order/${order_id}`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -101,7 +101,7 @@ class InvoiceService {
     const formData = new FormData();
     formData.append('pdf', file);
     const response = await axiosInstance.post(
-      `${import.meta.env['VITE_API_BASE_URL']}/ocr/invoice/upload`,
+      `/ocr/invoice/upload`,
       formData,
       {
         headers: {
@@ -117,7 +117,7 @@ class InvoiceService {
   async fetchCorporationInvoices(): Promise<AC4ERVInvoice[]> {
     const token = await auth.currentUser?.getIdToken(true);
     const response = await axiosInstance.get(
-      `${import.meta.env['VITE_API_BASE_URL']}/ocr/corporation-invoices`,
+      `/ocr/corporation-invoices`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -133,7 +133,7 @@ class InvoiceService {
     const formData = new FormData();
     formData.append('pdf', file);
     const response = await axiosInstance.post(
-      `${import.meta.env['VITE_API_BASE_URL']}/ocr/erv/upload`,
+      `/ocr/erv/upload`,
       formData,
       {
         headers: {
@@ -149,7 +149,7 @@ class InvoiceService {
   async fetchOutgoingERVs(): Promise<OutgoingERV[]> {
     const token = await auth.currentUser?.getIdToken(true);
     const response = await axiosInstance.get(
-      `${import.meta.env['VITE_API_BASE_URL']}/ocr/outgoing-ervs`,
+      `/ocr/outgoing-ervs`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -164,6 +164,21 @@ class InvoiceService {
     const response = await axiosInstance.post(`/gst/generate/${invoiceId}`);
     return response.data;
   }
+
+  // Confirm OCR invoice (AC4 or ERV)
+  async confirmOCRInvoice({ invoice_id, type, confirmed_data }: { invoice_id: string; type: 'ac4' | 'erv'; confirmed_data: Record<string, any> }) {
+    const token = await auth.currentUser?.getIdToken(true);
+    const response = await axiosInstance.post(
+      '/ocr/confirm-invoice',
+      { invoice_id, type, confirmed_data },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+    return response.data;
+  }
 }
 
 export default new InvoiceService();
@@ -172,7 +187,7 @@ export default new InvoiceService();
 export const fetchInvoiceByOrderId = async (order_id: string) => {
   const token = await auth.currentUser?.getIdToken(true);
   const response = await axiosInstance.get(
-    `${import.meta.env['VITE_API_BASE_URL']}/invoices/from-order/${order_id}`,
+    `/invoices/from-order/${order_id}`,
     {
       headers: {
         Authorization: `Bearer ${token}`,

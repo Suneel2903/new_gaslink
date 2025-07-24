@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const { getEffectiveUserId } = require('../utils/authUtils');
 const { getAuthToken, generateIRN, generateCreditNoteIRN, cancelIRN } = require('../services/gstService');
+const tokenService = require('../services/tokenService');
+const axios = require('axios');
 
 // Create invoice from delivered order
 const createInvoiceFromOrder = async (req, res) => {
@@ -115,8 +117,23 @@ const createInvoiceFromOrder = async (req, res) => {
             // Get current unit price for this cylinder type
             const currentUnitPrice = priceMap[item.cylinder_type_id] || 0;
             
+            // For each order item, fetch per-cylinder discount for this customer and cylinder type
+            const discountResult = await db.query(
+              'SELECT per_cylinder_discount FROM customer_cylinder_discounts WHERE customer_id = $1 AND cylinder_type_id = $2',
+              [order.customer_id, item.cylinder_type_id]
+            );
+            let discount_per_unit = discountResult.rows[0]?.per_cylinder_discount;
+            if (discount_per_unit === undefined) {
+              // Fallback to flat customer discount if per-cylinder not found
+              const flatDiscountResult = await db.query(
+                'SELECT discount FROM customers WHERE customer_id = $1',
+                [order.customer_id]
+              );
+              discount_per_unit = flatDiscountResult.rows[0]?.discount || 0;
+              console.warn(`[InvoiceController] No per-cylinder discount found for customer ${order.customer_id}, cylinder ${item.cylinder_type_id}. Falling back to flat discount.`);
+            }
             // Calculate effective price (same logic as order creation)
-            const effectiveUnitPrice = Math.max(currentUnitPrice - customerDiscount, 0);
+            const effectiveUnitPrice = Math.max(currentUnitPrice - discount_per_unit, 0);
             
             // Calculate total for this item
             const itemTotal = quantity * effectiveUnitPrice;
@@ -165,8 +182,23 @@ const createInvoiceFromOrder = async (req, res) => {
             // Get current unit price for this cylinder type
             const currentUnitPrice = priceMap[item.cylinder_type_id] || 0;
             
+            // For each order item, fetch per-cylinder discount for this customer and cylinder type
+            const discountResult = await db.query(
+              'SELECT per_cylinder_discount FROM customer_cylinder_discounts WHERE customer_id = $1 AND cylinder_type_id = $2',
+              [order.customer_id, item.cylinder_type_id]
+            );
+            let discount_per_unit = discountResult.rows[0]?.per_cylinder_discount;
+            if (discount_per_unit === undefined) {
+              // Fallback to flat customer discount if per-cylinder not found
+              const flatDiscountResult = await db.query(
+                'SELECT discount FROM customers WHERE customer_id = $1',
+                [order.customer_id]
+              );
+              discount_per_unit = flatDiscountResult.rows[0]?.discount || 0;
+              console.warn(`[InvoiceController] No per-cylinder discount found for customer ${order.customer_id}, cylinder ${item.cylinder_type_id}. Falling back to flat discount.`);
+            }
             // Calculate effective price (same logic as order creation)
-            const effectiveUnitPrice = Math.max(currentUnitPrice - customerDiscount, 0);
+            const effectiveUnitPrice = Math.max(currentUnitPrice - discount_per_unit, 0);
             
             // Calculate total for this item
             const itemTotal = quantity * effectiveUnitPrice;
@@ -178,7 +210,7 @@ const createInvoiceFromOrder = async (req, res) => {
             `;
             await db.query(invoiceItemQuery, [
                 invoice.invoice_id, item.cylinder_type_id, 
-                Math.round(quantity), currentUnitPrice, customerDiscount, itemTotal
+                Math.round(quantity), currentUnitPrice, discount_per_unit, itemTotal
             ]);
         }
 
@@ -1235,6 +1267,64 @@ const rejectCancel = async (req, res) => {
   }
 };
 
+// Generate IRN for an invoice
+const generateIRNForInvoice = async (req, res) => {
+  const invoice_id = req.params.id;
+  try {
+    // 1. Fetch invoice, distributor, customer, order_items, cylinder_types
+    const invoiceResult = await db.query('SELECT * FROM invoices WHERE invoice_id = $1', [invoice_id]);
+    if (!invoiceResult.rows.length) return res.status(404).json({ error: 'Invoice not found' });
+    const invoice = invoiceResult.rows[0];
+    const distributorResult = await db.query('SELECT * FROM distributors WHERE distributor_id = $1', [invoice.distributor_id]);
+    if (!distributorResult.rows.length) return res.status(404).json({ error: 'Distributor not found' });
+    const distributor = distributorResult.rows[0];
+    const customerResult = await db.query('SELECT * FROM customers WHERE customer_id = $1', [invoice.customer_id]);
+    if (!customerResult.rows.length) return res.status(404).json({ error: 'Customer not found' });
+    const customer = customerResult.rows[0];
+    const orderItemsResult = await db.query('SELECT * FROM order_items WHERE order_id = $1', [invoice.order_id]);
+    const orderItems = orderItemsResult.rows;
+    // TODO: Join cylinder_types for HSN/UOM if needed
+
+    // 2. Build IRN payload dynamically (TODO: implement full mapping)
+    const payload = {
+      // TODO: Build full payload as per Masters India spec
+      user_gstin: distributor.gstin,
+      data_source: 'erp',
+      // ...
+    };
+
+    // 3. Get valid JWT token for distributor
+    let token = await tokenService.getToken(distributor.distributor_id);
+    if (!token.startsWith('JWT ')) token = 'JWT ' + token;
+    console.log('Masters India IRN Authorization header:', token);
+
+    // 4. Call Masters India /einvoice/ endpoint
+    const response = await axios.post(
+      'https://sandb-api.mastersindia.co/api/v1/einvoice/',
+      payload,
+      {
+        headers: {
+          Authorization: token, // Always 'JWT <token>'
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    const data = response.data;
+
+    // 5. Store IRN, AckNo, AckDate, status, PDF, QRCode, etc. in the invoice
+    await db.query(
+      `UPDATE invoices SET irn = $1, ack_no = $2, ack_date = $3, status = 'issued', signed_qr = $4, invoice_pdf_url = $5 WHERE invoice_id = $6`,
+      [data.Irn, data.AckNo, data.AckDt, data.QRCodeUrl, data.EinvoicePdf, invoice_id]
+    );
+
+    // 6. Return IRN response to client
+    return res.json({ success: true, irn: data.Irn, ack_no: data.AckNo, ack_date: data.AckDt, response: data });
+  } catch (error) {
+    console.error('IRN generation error:', error.response?.data || error.message);
+    return res.status(500).json({ error: error.response?.data || error.message });
+  }
+};
+
 module.exports = {
   createInvoiceFromOrder,
   getInvoice,
@@ -1252,5 +1342,6 @@ module.exports = {
   approveCreditNote,
   rejectCreditNote,
   approveCancel,
-  rejectCancel
+  rejectCancel,
+  generateIRNForInvoice
 };

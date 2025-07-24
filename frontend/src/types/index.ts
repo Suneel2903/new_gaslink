@@ -72,61 +72,70 @@ export interface UpdateUserRequest {
 // CUSTOMER TYPES
 // ============================================================================
 
+export interface CustomerContact {
+  contact_id?: string;
+  customer_id?: string;
+  name: string;
+  phone: string; // always present
+  email: string; // always present
+  is_primary: boolean;
+  created_at?: string;
+}
+
+export interface CustomerCylinderDiscount {
+  discount_id?: string;
+  customer_id?: string;
+  cylinder_type_id: string;
+  per_kg_discount: number;
+  effective_from: string; // always present
+  cylinder_type_name?: string;
+  weight_kg?: number;
+  capacity_kg?: number; // add for frontend compatibility
+}
+
 export interface Customer {
   customer_id: string;
-  distributor_id: string;
+  customer_code?: string;
   business_name: string;
-  contact_person: string;
-  phone: string;
-  email: string;
-  address_line1: string;
-  address_line2?: string;
-  city: string;
-  state: string;
-  postal_code: string;
-  credit_period: number;
-  stop_supply: boolean;
-  stop_supply_reason?: string;
-  preferred_driver_id?: string;
-  status?: 'active' | 'suspended' | 'inactive';
-  customer_code?: string; // Legacy field for backward compatibility
-  preferred_driver?: string; // Legacy field for backward compatibility
-  created_at: string;
-  updated_at: string;
-  // Additional fields from joins
-  distributor_name?: string;
-  preferred_driver_name?: string;
-}
-
-export interface CreateCustomerRequest {
-  distributor_id?: string; // Optional - will come from authenticated user
-  business_name: string;
-  contact_person: string;
-  phone: string;
-  email: string;
-  address_line1: string;
-  address_line2?: string;
-  city: string;
-  state: string;
-  postal_code: string;
-  credit_period: number;
-  preferred_driver_id?: string;
-}
-
-export interface UpdateCustomerRequest {
-  business_name?: string;
   contact_person?: string;
-  phone?: string;
   email?: string;
-  address_line1?: string;
+  phone?: string;
+  address_line1: string;
   address_line2?: string;
-  city?: string;
-  state?: string;
+  city: string;
+  state: string;
   postal_code?: string;
-  credit_period?: number;
-  stop_supply?: boolean;
-  stop_supply_reason?: string;
+  country?: string;
+  credit_limit?: string;
+  credit_period_days?: string;
+  payment_terms?: string;
+  discount?: string;
+  billing_address_line1?: string;
+  billing_address_line2?: string;
+  billing_city?: string;
+  billing_state?: string;
+  billing_pincode?: string;
+  billing_state_code?: string;
+  gstin?: string;
+  trade_name?: string;
+  state_code?: string;
   preferred_driver_id?: string;
+  enable_grace_cylinder_recovery?: boolean;
+  grace_period_cylinder_recovery_days?: number;
+  contacts?: CustomerContact[];
+  cylinder_discounts?: CustomerCylinderDiscount[];
+  status?: string;
+  created_at?: string;
+}
+
+export interface CreateCustomerRequest extends Omit<Customer, 'customer_id' | 'contacts' | 'cylinder_discounts'> {
+  contacts: CustomerContact[];
+  cylinder_discounts: CustomerCylinderDiscount[];
+}
+
+export interface UpdateCustomerRequest extends Partial<Omit<Customer, 'customer_id' | 'contacts' | 'cylinder_discounts'>> {
+  contacts?: CustomerContact[];
+  cylinder_discounts?: CustomerCylinderDiscount[];
 }
 
 export interface CustomerModificationRequest {
@@ -150,6 +159,7 @@ export interface CustomerModificationRequest {
 export interface CylinderType {
   cylinder_type_id: string;
   name: string;
+  weight_kg?: number;
   capacity: number;
   unit_price: number;
   is_active: boolean;
@@ -259,6 +269,7 @@ export interface InventorySummary {
   inventory_unaccounted: number;
   closing_fulls: number;
   closing_empties: number;
+  threshold?: number; // Add this line
 }
 
 export interface InventoryAdjustment {
@@ -446,6 +457,7 @@ export interface AC4ERVInvoice {
   pdf_url?: string;
   extracted_data?: Record<string, unknown>;
   created_at: string;
+  confirmed?: boolean;
 }
 
 export interface OutgoingERV {
@@ -456,6 +468,8 @@ export interface OutgoingERV {
   status: string;
   pdf_url?: string;
   extracted_data?: Record<string, unknown>;
+  confirmed_data?: Record<string, unknown>;
+  confirmed?: boolean;
   created_at: string;
 }
 

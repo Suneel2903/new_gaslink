@@ -32,13 +32,8 @@ const ensureDailyInventoryExists = async (date, distributor_id) => {
          WHERE date = $1 AND cylinder_type_id = $2 AND distributor_id = $3`,
         [date, cylinderType.cylinder_type_id, distributor_id]
       );
-      
-      if (existingResult.rows.length > 0) {
-        console.log(`✅ Entry exists for ${date}, ${cylinderType.name} - skipping`);
-        skippedCount++;
-        continue;
-      }
-      
+
+      // Always proceed to create/update the row (do not skip if exists)
       // Find latest previous entry for carry-forward
       const lastEntryResult = await client.query(
         `SELECT closing_fulls, closing_empties 
@@ -47,7 +42,7 @@ const ensureDailyInventoryExists = async (date, distributor_id) => {
          ORDER BY date DESC LIMIT 1`,
         [date, cylinderType.cylinder_type_id, distributor_id]
       );
-      
+
       // Calculate carry-forward values
       const lastEntry = lastEntryResult.rows[0];
       const opening_fulls = lastEntry ? lastEntry.closing_fulls : 0;
@@ -98,9 +93,9 @@ const ensureDailyInventoryExists = async (date, distributor_id) => {
       );
       const inventory_unaccounted = Number(invUnaccResult.rows[0]?.total_unaccounted || 0);
       
-      // Calculate closing balances with correct formula
-      const closing_fulls = opening_fulls + delivered_qty - collected_empties_qty;
-      const closing_empties = opening_empties + collected_empties_qty - delivered_qty;
+      // Calculate closing balances with clamping to zero
+      const closing_fulls = Math.max(0, opening_fulls + delivered_qty - collected_empties_qty);
+      const closing_empties = Math.max(0, opening_empties + collected_empties_qty - delivered_qty);
       
       // Log the calculation for debugging
       console.log(`  📊 Calculation for ${cylinderType.name}:`);
@@ -109,8 +104,8 @@ const ensureDailyInventoryExists = async (date, distributor_id) => {
       console.log(`    Closing: ${closing_fulls} fulls, ${closing_empties} empties`);
       console.log(`    Soft Blocked: ${soft_blocked_qty}`);
       
-      // Insert new entry with UPSERT
-      const insertResult = await client.query(
+      // Upsert (insert or update) the summary row for this date/type/distributor
+      await client.query(
         `INSERT INTO inventory_daily_summary (
           date, cylinder_type_id, distributor_id,
           opening_fulls, opening_empties,
@@ -140,11 +135,6 @@ const ensureDailyInventoryExists = async (date, distributor_id) => {
           closing_fulls, closing_empties
         ]
       );
-      
-      if (insertResult.rows.length > 0) {
-        console.log(`✅ Created/updated entry for ${date}, ${cylinderType.name}`);
-        createdCount++;
-      }
     }
     
     const result = {

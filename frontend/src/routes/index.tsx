@@ -14,6 +14,8 @@ import CustomerInventoryPage from '../pages/Admin/CustomerInventoryPage';
 import PaymentsPage from '../pages/PaymentsPage';
 import CorporationInvoicesPage from '../pages/CorporationInvoicesPage';
 import NotFoundPage from '../pages/NotFoundPage';
+import DriversPage from '../pages/DriversPage';
+import VehiclesPage from '../pages/VehiclesPage';
 
 const AppRoutes = () => (
   <Router>
@@ -30,6 +32,8 @@ const AppRoutes = () => (
         <Route path="customers" element={<CustomersPage />} />
         <Route path="invoices" element={<InvoicesPage />} />
         <Route path="payments" element={<PaymentsPage />} />
+        <Route path="drivers" element={<DriversPage />} />
+        <Route path="vehicles" element={<VehiclesPage />} />
         <Route path="admin/cylinder-prices" element={<CylinderPricesPage />} />
         <Route path="admin/customer-inventory" element={<CustomerInventoryPage />} />
         <Route path="corporation-invoices" element={<CorporationInvoicesPage />} />

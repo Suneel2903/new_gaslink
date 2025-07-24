@@ -62,8 +62,8 @@ const comprehensiveInventoryFix = async () => {
         // Get actual order data for this date
         const orderData = await client.query(
           `SELECT 
-            COALESCE(SUM(CASE WHEN o.status IN ('delivered', 'completed') AND oi.is_full = true THEN oi.quantity ELSE 0 END), 0) AS delivered_qty,
-            COALESCE(SUM(CASE WHEN o.status IN ('delivered', 'completed') AND oi.is_full = false THEN oi.quantity ELSE 0 END), 0) AS collected_qty,
+            COALESCE(SUM(CASE WHEN o.status = 'delivered' THEN oi.delivered_quantity ELSE 0 END), 0) AS delivered_qty,
+            COALESCE(SUM(CASE WHEN o.status = 'delivered' THEN oi.empties_collected ELSE 0 END), 0) AS collected_qty,
             COALESCE(SUM(CASE WHEN o.status IN ('pending', 'processing') THEN oi.quantity ELSE 0 END), 0) AS soft_blocked_qty,
             COALESCE(SUM(CASE WHEN o.status = 'cancelled' THEN oi.quantity ELSE 0 END), 0) AS damaged_qty
            FROM orders o
@@ -79,7 +79,7 @@ const comprehensiveInventoryFix = async () => {
         const softBlockedQty = Number(orderData.rows[0]?.soft_blocked_qty || 0);
         const damagedQty = Number(orderData.rows[0]?.damaged_qty || 0);
         
-        // Calculate closing balances with correct formula
+        // Clamp closing balances to zero
         const closingFulls = Math.max(0, openingFulls + deliveredQty - collectedQty);
         const closingEmpties = Math.max(0, openingEmpties + collectedQty - deliveredQty);
         
@@ -89,7 +89,7 @@ const comprehensiveInventoryFix = async () => {
           empties: closingEmpties
         };
         
-        // Insert the inventory record
+        // Upsert (insert or update) the summary row for this date/type/distributor
         await client.query(
           `INSERT INTO inventory_daily_summary (
             id, date, cylinder_type_id, distributor_id,
@@ -103,7 +103,18 @@ const comprehensiveInventoryFix = async () => {
             $4, $5, 0, 0,
             $6, $7, $8, $9, $10, $11,
             'calculated', NOW(), 0, 0, 0
-          )`,
+          )
+          ON CONFLICT (date, cylinder_type_id, distributor_id) DO UPDATE SET
+            opening_fulls = EXCLUDED.opening_fulls,
+            opening_empties = EXCLUDED.opening_empties,
+            soft_blocked_qty = EXCLUDED.soft_blocked_qty,
+            delivered_qty = EXCLUDED.delivered_qty,
+            collected_empties_qty = EXCLUDED.collected_empties_qty,
+            damaged_qty = EXCLUDED.damaged_qty,
+            closing_fulls = EXCLUDED.closing_fulls,
+            closing_empties = EXCLUDED.closing_empties,
+            status = 'calculated',
+            updated_at = NOW();`,
           [
             dateStr, cylinder_type_id, distributorId,
             openingFulls, openingEmpties,

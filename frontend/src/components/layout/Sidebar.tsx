@@ -18,7 +18,9 @@ import {
   FaUserCog,
   FaRupeeSign,
   FaSun,
-  FaMoon
+  FaMoon,
+  FaIdBadge,
+  FaTruck
 } from 'react-icons/fa';
 import { useAuth } from '../../contexts/AuthContext';
 import ThemeToggle from './ThemeToggle';
@@ -63,6 +65,22 @@ const navItems: NavItem[] = [
     icon: FaUsers,
     roles: ['super_admin', 'admin', 'distributor_admin'],
     iconColor: 'text-indigo-600'
+  },
+  {
+    id: 'drivers',
+    label: 'Drivers',
+    path: '/app/drivers',
+    icon: FaIdBadge,
+    roles: ['super_admin', 'admin', 'distributor_admin', 'inventory'],
+    iconColor: 'text-cyan-700'
+  },
+  {
+    id: 'vehicles',
+    label: 'Vehicles',
+    path: '/app/vehicles',
+    icon: FaTruck,
+    roles: ['super_admin', 'admin', 'distributor_admin', 'inventory'],
+    iconColor: 'text-amber-700'
   },
   {
     id: 'invoices',

@@ -44,13 +44,21 @@ const createOrder = async (req, res) => {
         [cylinder_type_id, month, year]
       );
       let unit_price = priceResult.rows[0]?.unit_price || 0;
-      // Fetch customer discount
+      // Fetch per-cylinder discount for this customer and cylinder type
       const discountResult = await pool.query(
-        'SELECT discount FROM customers WHERE customer_id = $1',
-        [customer_id]
+        'SELECT per_cylinder_discount FROM customer_cylinder_discounts WHERE customer_id = $1 AND cylinder_type_id = $2',
+        [customer_id, cylinder_type_id]
       );
-      const discount_per_unit = discountResult.rows[0]?.discount || 0;
-      // Calculate effective price and total
+      let discount_per_unit = discountResult.rows[0]?.per_cylinder_discount;
+      if (discount_per_unit === undefined) {
+        // Fallback to flat customer discount if per-cylinder not found
+        const flatDiscountResult = await pool.query(
+          'SELECT discount FROM customers WHERE customer_id = $1',
+          [customer_id]
+        );
+        discount_per_unit = flatDiscountResult.rows[0]?.discount || 0;
+        console.warn(`[OrderController] No per-cylinder discount found for customer ${customer_id}, cylinder ${cylinder_type_id}. Falling back to flat discount.`);
+      }
       const effective_unit_price = Math.max(unit_price - discount_per_unit, 0);
       const total_price = effective_unit_price * quantity;
       // Add debug log
@@ -100,6 +108,13 @@ const updateOrderStatus = async (req, res) => {
     await pool.query(
       'UPDATE orders SET status = $1, updated_at = NOW() WHERE order_id = $2',
       [status, id]
+    );
+
+    // Log status change
+    await pool.query(
+      `INSERT INTO order_status_log (order_id, previous_status, new_status, changed_by, changed_at, notes)
+       VALUES ($1, $2, $3, $4, NOW(), $5)`,
+      [id, orderRows[0].status, status, user.user_id, 'Status updated via API']
     );
 
     // If this is a delivery and we have delivery data, update order items
@@ -375,6 +390,13 @@ const cancelOrder = async (req, res) => {
         [id]
       );
     }
+
+    // Log status change
+    await client.query(
+      `INSERT INTO order_status_log (order_id, previous_status, new_status, changed_by, changed_at, notes)
+       VALUES ($1, $2, $3, $4, NOW(), $5)`,
+      [id, order.status, 'cancelled', user.user_id, 'Order cancelled via API']
+    );
 
     // Commit transaction
     await client.query('COMMIT');

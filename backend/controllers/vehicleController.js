@@ -1,5 +1,71 @@
 const pool = require('../db');
 
+// List all vehicles
+const listVehicles = async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM vehicles ORDER BY created_at DESC');
+    res.json({ vehicles: result.rows });
+  } catch (err) {
+    console.error('listVehicles error:', err);
+    res.status(500).json({ error: 'Failed to fetch vehicles' });
+  }
+};
+
+// Create a new vehicle
+const createVehicle = async (req, res) => {
+  try {
+    const { vehicle_number, cylinder_capacity, ownership_type, status } = req.body;
+    // Prefer distributor_id from auth, else from body
+    const distributor_id = req.user?.distributor_id || req.body.distributor_id;
+    if (!distributor_id) {
+      return res.status(400).json({ error: 'Missing distributor_id' });
+    }
+    const result = await pool.query(
+      `INSERT INTO vehicles (vehicle_number, cylinder_capacity, ownership_type, status, distributor_id)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [vehicle_number, cylinder_capacity, ownership_type, status || 'Available', distributor_id]
+    );
+    res.json({ success: true, vehicle: result.rows[0] });
+  } catch (err) {
+    console.error('createVehicle error:', err);
+    res.status(500).json({ error: 'Failed to create vehicle' });
+  }
+};
+
+// Update vehicle details
+const updateVehicle = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { vehicle_number, cylinder_capacity, ownership_type, status } = req.body;
+    const result = await pool.query(
+      `UPDATE vehicles SET vehicle_number = $1, cylinder_capacity = $2, ownership_type = $3, status = $4, updated_at = NOW() WHERE vehicle_id = $5 RETURNING *`,
+      [vehicle_number, cylinder_capacity, ownership_type, status, id]
+    );
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Vehicle not found' });
+    res.json({ success: true, vehicle: result.rows[0] });
+  } catch (err) {
+    console.error('updateVehicle error:', err);
+    res.status(500).json({ error: 'Failed to update vehicle' });
+  }
+};
+
+// Deactivate/reactivate vehicle (soft delete)
+const deactivateVehicle = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body; // 'Available' or 'Inactive'
+    const result = await pool.query(
+      `UPDATE vehicles SET status = $1, updated_at = NOW() WHERE vehicle_id = $2 RETURNING *`,
+      [status, id]
+    );
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Vehicle not found' });
+    res.json({ success: true, vehicle: result.rows[0] });
+  } catch (err) {
+    console.error('deactivateVehicle error:', err);
+    res.status(500).json({ error: 'Failed to update vehicle status' });
+  }
+};
+
 // Get cancelled stock in vehicles for a distributor
 const getCancelledStockInVehicles = async (req, res) => {
   try {
@@ -59,6 +125,14 @@ const moveCancelledStockToInventory = async (req, res) => {
     `;
     
     await pool.query(updateQuery, [quantity, vehicle_id, cylinder_type_id, distributor_id]);
+
+    // Mark cancelled stock as moved to inventory
+    await pool.query(
+      `UPDATE vehicle_cancelled_stock_log
+       SET moved_to_inventory = true, moved_at = NOW()
+       WHERE vehicle_id = $1 AND cylinder_type_id = $2 AND moved_to_inventory = false`,
+      [vehicle_id, cylinder_type_id]
+    );
     
     res.json({ 
       success: true, 
@@ -114,6 +188,10 @@ const getVehicleInventorySummary = async (req, res) => {
 };
 
 module.exports = {
+  listVehicles,
+  createVehicle,
+  updateVehicle,
+  deactivateVehicle,
   getCancelledStockInVehicles,
   moveCancelledStockToInventory,
   getVehicleInventorySummary

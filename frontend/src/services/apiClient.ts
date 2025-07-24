@@ -193,18 +193,22 @@ export const api = {
     updateDistributorSettings: (distributorId: string, settings: any) => 
       apiClient.put<ApiResponse<{ message: string }>>(`/settings/${distributorId}`, settings),
     getDefaultDueDateSettings: () => 
-      apiClient.get<ApiResponse<any>>('/settings/defaults/due-dates')
+      apiClient.get<ApiResponse<any>>('/settings/defaults/due-dates'),
+    getCylinderThresholds: (distributorId: string) =>
+      apiClient.get<ApiResponse<any>>('/settings/cylinder-thresholds', { params: { distributor_id: distributorId } }),
+    updateCylinderThresholds: (distributorId: string, thresholds: Array<{ cylinder_type_id: string; threshold: number }>) =>
+      apiClient.post<ApiResponse<any>>('/settings/cylinder-thresholds', { distributor_id: distributorId, thresholds }),
   },
 
   // Vehicle endpoints
   vehicle: {
     getCancelledStockInVehicles: (distributorId: string) => 
-      apiClient.get<ApiResponse<VehicleCancelledStock[]>>(`/vehicle/cancelled-stock/${distributorId}`),
+      apiClient.get<ApiResponse<VehicleCancelledStock[]>>(`/vehicles/cancelled-stock/${distributorId}`),
     moveCancelledStockToInventory: (data: { vehicle_id: string; cylinder_type_id: string; quantity: number }) => 
-      apiClient.post<ApiResponse<{ message: string; data: any }>>('/vehicle/cancelled-stock/move', data),
+      apiClient.post<ApiResponse<{ message: string; data: any }>>('/vehicles/cancelled-stock/move', data),
     getVehicleInventorySummary: (distributorId: string) => 
-      apiClient.get<ApiResponse<VehicleInventorySummary[]>>(`/vehicle/inventory-summary/${distributorId}`),
+      apiClient.get<ApiResponse<VehicleInventorySummary[]>>(`/vehicles/inventory-summary/${distributorId}`),
   },
 };
 
-export default apiClient; 
+export default apiClient;

@@ -9,7 +9,9 @@ import FormInput from '../components/FormInput';
 import FormSelect from '../components/FormSelect';
 import useEscKey from '../hooks/useEscKey';
 import EmptyState from '../components/EmptyState';
-import type { ApiError, Customer } from '../types';
+import type { ApiError, Customer, CustomerCylinderDiscount, CylinderType, CustomerContact } from '../types';
+import driverService from '../services/driverService';
+import CustomerForm from '../components/CustomerForm';
 
 interface SearchFilters {
   status: string;
@@ -21,9 +23,7 @@ interface SearchFilters {
 const initialForm: CustomerFormData = {
   customer_code: '',
   business_name: '',
-  contact_person: '',
   email: '',
-  phone: '',
   address_line1: '',
   address_line2: '',
   city: '',
@@ -33,7 +33,20 @@ const initialForm: CustomerFormData = {
   credit_limit: '',
   credit_period_days: '',
   payment_terms: '',
-  discount: '',
+  billing_address_line1: '',
+  billing_address_line2: '',
+  billing_city: '',
+  billing_state: '',
+  billing_pincode: '',
+  billing_state_code: '',
+  gstin: '',
+  trade_name: '',
+  state_code: '',
+  preferred_driver_id: '',
+  enable_grace_cylinder_recovery: false,
+  grace_period_cylinder_recovery_days: undefined,
+  contacts: [],
+  cylinder_discounts: [],
 };
 
 export const CustomersPage: React.FC = () => {
@@ -58,6 +71,120 @@ export const CustomersPage: React.FC = () => {
   const [stopReason, setStopReason] = useState('');
   const [savingStop, setSavingStop] = useState(false);
   const [stopSuccess, setStopSuccess] = useState(false);
+  const [cylinderTypes, setCylinderTypes] = useState<CylinderType[]>([]);
+  const [cylinderDiscounts, setCylinderDiscounts] = useState<CustomerCylinderDiscount[]>([]);
+  const [discountError, setDiscountError] = useState('');
+  const [contacts, setContacts] = useState<CustomerContact[]>([{
+    name: '',
+    phone: '',
+    email: '',
+    is_primary: true
+  }]);
+  const [contactsError, setContactsError] = useState('');
+  const [drivers, setDrivers] = useState<{ driver_id: string; name: string }[]>([]);
+  const [preferredDriverId, setPreferredDriverId] = useState('');
+  const [gstin, setGstin] = useState('');
+  const [billingAddress, setBillingAddress] = useState({
+    billing_address_line1: '',
+    billing_address_line2: '',
+    billing_city: '',
+    billing_state: '',
+    billing_pincode: '',
+    billing_state_code: '',
+    trade_name: '',
+  });
+  const [gstinLoading, setGstinLoading] = useState(false);
+  const [gstinError, setGstinError] = useState('');
+  const [enableGraceRecovery, setEnableGraceRecovery] = useState(false);
+  const [gracePeriodDays, setGracePeriodDays] = useState(0);
+  const [tradeName, setTradeName] = useState('');
+  const [stateCode, setStateCode] = useState('');
+  // 1. Add toast state
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  // Add editCustomerData state
+  const [editCustomerData, setEditCustomerData] = useState(initialForm);
+
+  // Add discount row
+  const handleAddDiscount = () => {
+    if (cylinderDiscounts.length < cylinderTypes.length) {
+      setCylinderDiscounts([
+        ...cylinderDiscounts,
+        { cylinder_type_id: '', per_kg_discount: 0 }
+      ]);
+    }
+  };
+  // Remove discount row
+  const handleRemoveDiscount = (idx: number) => {
+    setCylinderDiscounts(cylinderDiscounts.filter((_, i) => i !== idx));
+  };
+  // Update discount row
+  const handleDiscountChange = (idx: number, field: keyof CustomerCylinderDiscount, value: any) => {
+    setCylinderDiscounts(cylinderDiscounts.map((d, i) => i === idx ? { ...d, [field]: value } : d));
+  };
+  // Prevent duplicate cylinder types
+  const usedCylinderTypeIds = cylinderDiscounts.map(d => d.cylinder_type_id);
+  // Validate discounts before submit
+  const validateDiscounts = () => {
+    if (cylinderDiscounts.length === 0) {
+      setDiscountError('At least one discount is required');
+      return false;
+    }
+    for (const d of cylinderDiscounts) {
+      if (!d.cylinder_type_id) {
+        setDiscountError('Select cylinder type for all discounts');
+        return false;
+      }
+      if (d.per_kg_discount < 0) {
+        setDiscountError('Discount amount must be >= 0');
+        return false;
+      }
+    }
+    setDiscountError('');
+    return true;
+  };
+
+  // Add contact row
+  const handleAddContact = () => {
+    if ((contacts || []).length < 3) {
+      setContacts([...(contacts || []), { name: '', phone: '', email: '', is_primary: false }]);
+    }
+  };
+  // Remove contact row
+  const handleRemoveContact = (idx: number) => {
+    const newContacts = contacts.filter((_, i) => i !== idx);
+    // Ensure at least one is primary
+    if (!newContacts.some(c => c.is_primary) && newContacts.length > 0) {
+      newContacts[0].is_primary = true;
+    }
+    setContacts(newContacts);
+  };
+  // Update contact row
+  const handleContactChange = (idx: number, field: keyof CustomerContact, value: any) => {
+    setContacts(contacts.map((c, i) => i === idx ? { ...c, [field]: value } : c));
+  };
+  // Set primary contact
+  const handleSetPrimaryContact = (idx: number) => {
+    setContacts(contacts.map((c, i) => ({ ...c, is_primary: i === idx })));
+  };
+  // Validate contacts before submit
+  const validateContacts = () => {
+    if (!contacts || contacts.length === 0) {
+      setContactsError('At least one contact is required');
+      return false;
+    }
+    if (!contacts.some(c => c.is_primary)) {
+      setContactsError('At least one contact must be marked as primary');
+      return false;
+    }
+    for (const c of contacts) {
+      if (!c.name || c.name.length < 2) {
+        setContactsError('Contact name is required and must be at least 2 characters');
+        return false;
+      }
+    }
+    setContactsError('');
+    return true;
+  };
 
   // New search panel state
   const [searchFilters, setSearchFilters] = useState<SearchFilters>({
@@ -77,12 +204,27 @@ export const CustomersPage: React.FC = () => {
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors },
     reset,
+    getValues,
+    clearErrors,
   } = useForm<CustomerFormData>({
     resolver: zodResolver(customerSchema),
     defaultValues: initialForm,
   });
+
+  // Sync contacts to form data
+  useEffect(() => {
+    setValue('contacts', contacts);
+    console.log('[DEBUG] useEffect: contacts synced to form', contacts);
+  }, [contacts, setValue]);
+
+  // Sync cylinderDiscounts to form data
+  useEffect(() => {
+    setValue('cylinder_discounts', cylinderDiscounts);
+    console.log('[DEBUG] useEffect: cylinderDiscounts synced to form', cylinderDiscounts);
+  }, [cylinderDiscounts, setValue]);
 
   const {
     register: registerEdit,
@@ -181,6 +323,61 @@ export const CustomersPage: React.FC = () => {
     fetchCustomers();
   }, [distributor_id, isSuperAdmin]);
 
+  // Fetch drivers on modal open
+  useEffect(() => {
+    if (showAdd || showEdit) {
+      api.customers.getDrivers().then(res => {
+        const users = res.data?.drivers || [];
+        setDrivers(users.map((user: any) => ({ driver_id: user.driver_id, name: user.driver_name })));
+      });
+    }
+  }, [showAdd, showEdit]);
+
+  // 1. GSTIN fetch handler: Use a placeholder if api.customers.fetchGstinDetails does not exist
+  const handleFetchGstin = async () => {
+    setGstinLoading(true);
+    setGstinError('');
+    try {
+      // TODO: Replace with actual GSTIN fetch API call when backend is ready
+      // const res = await api.customers.fetchGstinDetails(gstin);
+      // const data = res.data?.data || res.data;
+      // setBillingAddress({ ... });
+      setTimeout(() => {
+        setBillingAddress({
+          billing_address_line1: 'Sample Address 1',
+          billing_address_line2: 'Sample Address 2',
+          billing_city: 'Sample City',
+          billing_state: 'Sample State',
+          billing_pincode: '123456',
+          billing_state_code: '12',
+          trade_name: 'Sample Trade',
+        });
+        setGstinLoading(false);
+      }, 1000);
+    } catch (err) {
+      setGstinError('Failed to fetch GSTIN details');
+      setGstinLoading(false);
+    }
+  };
+
+  // 2. Ensure at least one discount row is present when modal opens
+  useEffect(() => {
+    if ((showAdd || showEdit) && cylinderDiscounts.length === 0 && cylinderTypes.length > 0) {
+      setCylinderDiscounts([{ cylinder_type_id: '', per_kg_discount: 0 }]);
+    }
+  }, [showAdd, showEdit, cylinderTypes]);
+
+  // 1. Add debug logging to cylinder types fetch
+  useEffect(() => {
+    if (showAdd || showEdit) {
+      api.cylinderTypes.getAll(distributor_id || '').then(res => {
+        const types = res.data?.data || res.data || [];
+        setCylinderTypes(types);
+        console.log('Fetched cylinder types:', types, 'for distributor_id:', distributor_id);
+      });
+    }
+  }, [showAdd, showEdit, distributor_id]);
+
   console.log("customers before filter:", customers);
   // Filtered customers with new search panel
   const filteredCustomers = (customers ?? []).filter(customer => {
@@ -243,35 +440,66 @@ export const CustomersPage: React.FC = () => {
   }
 
   const onSubmit = async (data: CustomerFormData) => {
+    // Always sync local state to form data before validation
+    setValue('contacts', contacts);
+    setValue('cylinder_discounts', cylinderDiscounts);
+    await new Promise(r => setTimeout(r, 0)); // allow state to flush
+    const currentValues = getValues();
+    console.log('[DEBUG] onSubmit called', currentValues, errors);
+    // 3. Log validation errors if present
+    if (Object.keys(errors).length > 0) {
+      console.log('[DEBUG] Validation errors:', errors);
+    }
+    // 4. Check contacts and discounts
+    if (!contacts || contacts.length === 0) {
+      console.log('[DEBUG] No contacts provided');
+      setContactsError('At least one contact is required');
+      return;
+    } else {
+      setContactsError('');
+    }
+    if (!cylinderDiscounts || cylinderDiscounts.length === 0) {
+      console.log('[DEBUG] No cylinder discounts provided');
+      setDiscountError('At least one cylinder discount is required');
+      return;
+    } else {
+      setDiscountError('');
+    }
     setFormError('');
     setSubmitting(true);
-    
+    // Build payload with all required fields
+    const { customer_code, ...restValues } = currentValues;
     const payload = {
-      business_name: data.business_name || '',
-      contact_person: data.contact_person,
-      phone: data.phone,
-      email: data.email || '',
-      address_line1: data.address_line1,
-      address_line2: data.address_line2 || '',
-      city: data.city,
-      state: data.state,
-      postal_code: data.postal_code || '',
-      credit_period: data.credit_period_days ? Number(data.credit_period_days) : 30,
+      ...restValues,
+      business_name: restValues.business_name || '',
+      address_line1: restValues.address_line1 || '',
+      city: restValues.city || '',
+      state: restValues.state || '',
+      customer_code: customer_code || '',
+      contacts: contacts,
+      cylinder_discounts: cylinderDiscounts,
     };
-    
     // Add distributor_id for super admins
     if (isSuperAdmin && distributor_id) {
       (payload as any).distributor_id = distributor_id;
     }
-    
     try {
+      console.log('[DEBUG] Payload to be sent to api.customers.create:', payload);
       const result = await api.customers.create(payload);
+      console.log('[DEBUG] API response:', result);
       setShowAdd(false);
       reset(initialForm);
+      console.log('[DEBUG] Modal closed, resetting form');
       fetchCustomers();
+      console.log('[DEBUG] Customer list refreshed');
+      setToast({ type: 'success', message: 'Customer saved successfully!' });
+      setTimeout(() => setToast(null), 3000);
     } catch (error: unknown) {
       const apiError = error as ApiError;
+      console.error('[DEBUG] Error in onSubmit:', apiError);
       setFormError(apiError.message || 'Failed to add customer');
+      setToast({ type: 'error', message: apiError.message || 'Failed to save customer' });
+      setTimeout(() => setToast(null), 4000);
     } finally {
       setSubmitting(false);
     }
@@ -284,15 +512,8 @@ export const CustomersPage: React.FC = () => {
     try {
       // Only include fields that are in UpdateCustomerRequest
       const updatePayload: any = {
-        contact_person: data.contact_person,
-        phone: data.phone,
-        email: data.email || '',
-        address_line1: data.address_line1,
-        address_line2: data.address_line2 || '',
-        city: data.city,
-        state: data.state,
-        postal_code: data.postal_code || '',
-        credit_period: data.credit_period_days ? Number(data.credit_period_days) : 30,
+        contacts: contacts,
+        cylinder_discounts: cylinderDiscounts,
       };
       
       if (editId) {
@@ -310,19 +531,46 @@ export const CustomersPage: React.FC = () => {
     }
   };
 
-  const openEditModal = (customer: Customer) => {
-    setEditId(customer.customer_id);
-    resetEdit({
-      business_name: customer.business_name || '',
-      contact_person: customer.contact_person || '',
+  const openEditModal = async (customerOrId: string | Customer) => {
+    let customer = customerOrId;
+    // If only an ID is provided, fetch the full customer object
+    if (typeof customerOrId === 'string') {
+      // Fetch full customer by ID from API
+      try {
+        const res = await api.customers.getById(customerOrId);
+        customer = res.data;
+        console.log('[openEditModal] Loaded full customer by ID:', customer);
+      } catch (err) {
+        console.error('[openEditModal] Failed to fetch customer by ID:', err);
+        return;
+      }
+    }
+    // Map all fields for edit form initial values
+    setEditCustomerData({
+      ...initialForm,
+      ...customer,
+      contacts: (customer.contacts || []).map(c => ({
+        name: c.name || '',
+        is_primary: !!c.is_primary,
+        email: c.email || '',
+        phone: c.phone || '',
+      })),
+      cylinder_discounts: (customer.cylinder_discounts || []).map(d => ({
+        cylinder_type_id: d.cylinder_type_id || '',
+        per_kg_discount: Number(d.per_kg_discount) || 0,
+        effective_from: d.effective_from || '',
+        cylinder_type_name: d.cylinder_type_name || '',
+        capacity_kg: d.capacity_kg !== undefined ? Number(d.capacity_kg) : undefined,
+      })),
+      gstin: customer.gstin || '',
       email: customer.email || '',
       phone: customer.phone || '',
-      address_line1: customer.address_line1 || '',
-      address_line2: customer.address_line2 || '',
-      city: customer.city || '',
-      state: customer.state || '',
-      postal_code: customer.postal_code || '',
-      credit_period_days: customer.credit_period?.toString() || '',
+      // Map any other fields as needed
+    });
+    console.log('[openEditModal] Edit initial values (should include gstin):', {
+      ...initialForm,
+      ...customer,
+      gstin: customer.gstin || '',
     });
     setShowEdit(true);
   };
@@ -376,6 +624,34 @@ export const CustomersPage: React.FC = () => {
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-IN');
+  };
+
+  // Add this handler for adding a customer
+  const handleAddCustomer = async (data: CustomerFormData) => {
+    const payload = { ...data };
+    if (distributor_id) {
+      payload.distributor_id = distributor_id;
+    }
+    console.log('[CustomersPage] handleAddCustomer payload:', payload);
+    setSubmitting(true);
+    setFormError('');
+    try {
+      const result = await api.customers.create(payload);
+      console.log('[CustomersPage] API response:', result);
+      setShowAdd(false);
+      reset(initialForm);
+      fetchCustomers();
+      setToast({ type: 'success', message: 'Customer saved successfully!' });
+      setTimeout(() => setToast(null), 3000);
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      console.error('[CustomersPage] Error creating customer:', apiError);
+      setFormError(apiError.message || 'Failed to add customer');
+      setToast({ type: 'error', message: apiError.message || 'Failed to save customer' });
+      setTimeout(() => setToast(null), 4000);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -557,7 +833,6 @@ export const CustomersPage: React.FC = () => {
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
               <thead className="bg-gray-50 dark:bg-gray-800">
                 <tr>
-                  <th className="px-4 py-2 text-center font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Customer Code</th>
                   <th className="px-4 py-2 text-center font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Business Name</th>
                   <th className="px-4 py-2 text-center font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Contact Person</th>
                   <th className="px-4 py-2 text-center font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Phone</th>
@@ -569,10 +844,9 @@ export const CustomersPage: React.FC = () => {
               <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
                 {filteredCustomers.map((customer) => (
                   <tr key={customer.customer_id} className="hover:bg-gray-50 dark:hover:bg-gray-800">
-                    <td className="px-4 py-2 text-center font-medium text-gray-900 dark:text-white">{customer.customer_code}</td>
                     <td className="px-4 py-2 text-center text-gray-500 dark:text-gray-400">{customer.business_name || '-'}</td>
-                    <td className="px-4 py-2 text-center text-gray-500 dark:text-gray-400">{customer.contact_person}</td>
-                    <td className="px-4 py-2 text-center text-gray-500 dark:text-gray-400">{customer.phone}</td>
+                    <td className="px-4 py-2 text-center text-gray-500 dark:text-gray-400">{customer.contacts && customer.contacts.length > 0 ? (customer.contacts.find(c => c.is_primary)?.name || customer.contacts[0].name) : '-'}</td>
+                    <td className="px-4 py-2 text-center text-gray-500 dark:text-gray-400">{customer.contacts && customer.contacts.length > 0 ? (customer.contacts.find(c => c.is_primary)?.phone || customer.contacts[0].phone) : '-'}</td>
                     <td className="px-4 py-2 text-center">
                       <span className={`px-2 py-1 text-xs font-medium rounded-full ${
                         customer.status === 'active' ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' :
@@ -617,233 +891,111 @@ export const CustomersPage: React.FC = () => {
 
       {/* Add Customer Modal */}
       {showAdd && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setShowAdd(false);
-              reset(initialForm);
-            }
-          }}
-        >
-          <div className="bg-white rounded-lg shadow-lg w-full max-w-lg p-8 relative animate-fade-in">
-            <button
-              className="absolute top-3 right-3 text-gray-400 hover:text-gray-700 text-2xl font-bold"
-              onClick={() => {
-                setShowAdd(false);
-                reset(initialForm);
-              }}
-              aria-label="Close"
-            >
-              &times;
-            </button>
-            <h2 className="text-xl font-bold mb-4 text-gray-900">Add New Customer</h2>
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <FormInput
-                  label="Business Name"
-                  type="text"
-                  error={errors.business_name}
-                  {...register('business_name')}
-                />
-                <FormInput
-                  label="Contact Person *"
-                  type="text"
-                  error={errors.contact_person}
-                  {...register('contact_person')}
-                />
-                <FormInput
-                  label="Email"
-                  type="email"
-                  error={errors.email}
-                  {...register('email')}
-                />
-                <FormInput
-                  label="Phone *"
-                  type="text"
-                  error={errors.phone}
-                  {...register('phone')}
-                />
-                <FormInput
-                  label="Address Line 1 *"
-                  type="text"
-                  error={errors.address_line1}
-                  {...register('address_line1')}
-                />
-                <FormInput
-                  label="Address Line 2"
-                  type="text"
-                  error={errors.address_line2}
-                  {...register('address_line2')}
-                />
-                <FormInput
-                  label="City *"
-                  type="text"
-                  error={errors.city}
-                  {...register('city')}
-                />
-                <FormInput
-                  label="State *"
-                  type="text"
-                  error={errors.state}
-                  {...register('state')}
-                />
-                <FormInput
-                  label="Postal Code"
-                  type="text"
-                  error={errors.postal_code}
-                  {...register('postal_code')}
-                />
-                <FormInput
-                  label="Credit Period (Days)"
-                  type="number"
-                  error={errors.credit_period_days}
-                  {...register('credit_period_days')}
-                />
-              </div>
-              {formError && <div className="text-red-500 text-center mb-2">{formError}</div>}
-              <div className="flex justify-end gap-2 mt-4">
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => {
-                    setShowAdd(false);
-                    reset(initialForm);
-                  }}
-                  disabled={submitting}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn-primary flex items-center" disabled={submitting}>
-                  {submitting && <span className="loader mr-2"></span>}
-                  {submitting ? 'Saving...' : 'Save Customer'}
-                </button>
-              </div>
-            </form>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40" onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            setShowAdd(false);
+            reset(initialForm);
+          }
+        }}>
+          <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl p-0 relative animate-fade-in max-h-[90vh] flex flex-col">
+            <div className="sticky top-0 bg-white z-10 border-b px-8 py-4 rounded-t-lg">
+              <h2 className="text-2xl font-bold text-gray-900">Add New Customer</h2>
+            </div>
+            {toast && (
+              <div className={`w-full px-4 py-2 rounded mb-4 text-center font-semibold ${toast.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{toast.message}</div>
+            )}
+            <CustomerForm
+              mode="add"
+              initialValues={initialForm}
+              onSubmit={handleAddCustomer}
+              onCancel={() => { setShowAdd(false); reset(initialForm); }}
+              loading={submitting}
+              contacts={contacts}
+              setContacts={setContacts}
+              contactsError={contactsError}
+              setContactsError={setContactsError}
+              cylinderDiscounts={cylinderDiscounts}
+              setCylinderDiscounts={setCylinderDiscounts}
+              discountError={discountError}
+              setDiscountError={setDiscountError}
+              cylinderTypes={cylinderTypes}
+              drivers={drivers}
+              preferredDriverId={preferredDriverId}
+              setPreferredDriverId={setPreferredDriverId}
+              gstin={gstin}
+              setGstin={setGstin}
+              gstinError={gstinError}
+              setGstinError={setGstinError}
+              gstinLoading={gstinLoading}
+              handleFetchGstin={handleFetchGstin}
+              enableGraceRecovery={enableGraceRecovery}
+              setEnableGraceRecovery={setEnableGraceRecovery}
+              gracePeriodDays={gracePeriodDays}
+              setGracePeriodDays={setGracePeriodDays}
+              billingAddress={billingAddress}
+            />
           </div>
         </div>
       )}
 
       {/* Edit Customer Modal */}
       {showEdit && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setShowEdit(false);
-              resetEdit(initialForm);
-            }
-          }}
-        >
-          <div className="bg-white rounded-lg shadow-lg w-full max-w-lg p-8 relative animate-fade-in">
-            <button
-              className="absolute top-3 right-3 text-gray-400 hover:text-gray-700 text-2xl font-bold"
-              onClick={() => {
-                setShowEdit(false);
-                resetEdit(initialForm);
-              }}
-              aria-label="Close"
-            >
-              &times;
-            </button>
-            <h2 className="text-xl font-bold mb-4 text-gray-900">Edit Customer</h2>
-            <form onSubmit={handleSubmitEdit(onSubmitEdit)} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <FormInput
-                  label="Business Name"
-                  type="text"
-                  error={editErrors.business_name}
-                  {...registerEdit('business_name')}
-                />
-                <FormInput
-                  label="Contact Person *"
-                  type="text"
-                  error={editErrors.contact_person}
-                  {...registerEdit('contact_person')}
-                />
-                <FormInput
-                  label="Email"
-                  type="email"
-                  error={editErrors.email}
-                  {...registerEdit('email')}
-                />
-                <FormInput
-                  label="Phone *"
-                  type="text"
-                  error={editErrors.phone}
-                  {...registerEdit('phone')}
-                />
-                <FormInput
-                  label="Address Line 1 *"
-                  type="text"
-                  error={editErrors.address_line1}
-                  {...registerEdit('address_line1')}
-                />
-                <FormInput
-                  label="Address Line 2"
-                  type="text"
-                  error={editErrors.address_line2}
-                  {...registerEdit('address_line2')}
-                />
-                <FormInput
-                  label="City *"
-                  type="text"
-                  error={editErrors.city}
-                  {...registerEdit('city')}
-                />
-                <FormInput
-                  label="State *"
-                  type="text"
-                  error={editErrors.state}
-                  {...registerEdit('state')}
-                />
-                <FormInput
-                  label="Postal Code"
-                  type="text"
-                  error={editErrors.postal_code}
-                  {...registerEdit('postal_code')}
-                />
-                <FormInput
-                  label="Credit Period (Days)"
-                  type="number"
-                  error={editErrors.credit_period_days}
-                  {...registerEdit('credit_period_days')}
-                />
-              </div>
-              {editError && <div className="text-red-500 text-center mb-2">{editError}</div>}
-              <div className="flex justify-end gap-2 mt-4">
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => {
-                    setShowEdit(false);
-                    resetEdit(initialForm);
-                  }}
-                  disabled={editSubmitting}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn-primary flex items-center" disabled={editSubmitting}>
-                  {editSubmitting && <span className="loader mr-2"></span>}
-                  {editSubmitting ? 'Saving...' : 'Update Customer'}
-                </button>
-              </div>
-            </form>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40" onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            setShowEdit(false);
+            resetEdit(initialForm);
+          }
+        }}>
+          <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl p-0 relative animate-fade-in max-h-[90vh] flex flex-col">
+            <div className="sticky top-0 bg-white z-10 border-b px-8 py-4 rounded-t-lg">
+              <h2 className="text-2xl font-bold text-gray-900">Edit Customer</h2>
+            </div>
+            {toast && (
+              <div className={`w-full px-4 py-2 rounded mb-4 text-center font-semibold ${toast.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{toast.message}</div>
+            )}
+            <CustomerForm
+              mode="edit"
+              initialValues={editCustomerData}
+              onSubmit={handleSubmitEdit(onSubmitEdit)}
+              onCancel={() => { setShowEdit(false); resetEdit(initialForm); }}
+              loading={editSubmitting}
+              contacts={contacts}
+              setContacts={setContacts}
+              contactsError={contactsError}
+              setContactsError={setContactsError}
+              cylinderDiscounts={cylinderDiscounts}
+              setCylinderDiscounts={setCylinderDiscounts}
+              discountError={discountError}
+              setDiscountError={setDiscountError}
+              cylinderTypes={cylinderTypes}
+              drivers={drivers}
+              preferredDriverId={preferredDriverId}
+              setPreferredDriverId={setPreferredDriverId}
+              gstin={gstin}
+              setGstin={setGstin}
+              gstinError={gstinError}
+              setGstinError={setGstinError}
+              gstinLoading={gstinLoading}
+              handleFetchGstin={handleFetchGstin}
+              enableGraceRecovery={enableGraceRecovery}
+              setEnableGraceRecovery={setEnableGraceRecovery}
+              gracePeriodDays={gracePeriodDays}
+              setGracePeriodDays={setGracePeriodDays}
+              billingAddress={billingAddress}
+            />
           </div>
         </div>
       )}
 
-      {/* Customer Details Modal */}
+      {/* Customer Details Modal (restore to table/grid layout) */}
       {showDetails && detailsCustomer && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40"
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               setShowDetails(false);
               setDetailsCustomer(null);
             }
-          }}
-        >
+          }}>
           <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl p-8 relative animate-fade-in">
             <button
               className="absolute top-3 right-3 text-gray-400 hover:text-gray-700 text-2xl font-bold"
@@ -860,11 +1012,7 @@ export const CustomersPage: React.FC = () => {
               <div>
                 <h3 className="text-lg font-semibold mb-3">Basic Information</h3>
                 <div className="space-y-2">
-                  <div><strong>Customer Code:</strong> {detailsCustomer.customer_code}</div>
                   <div><strong>Business Name:</strong> {detailsCustomer.business_name || '-'}</div>
-                  <div><strong>Contact Person:</strong> {detailsCustomer.contact_person}</div>
-                  <div><strong>Email:</strong> {detailsCustomer.email || '-'}</div>
-                  <div><strong>Phone:</strong> {detailsCustomer.phone}</div>
                   <div><strong>Status:</strong> 
                     <span className={`ml-2 px-2 py-1 text-xs font-medium rounded-full ${
                       detailsCustomer.status === 'active' ? 'bg-green-100 text-green-800' :
@@ -874,6 +1022,11 @@ export const CustomersPage: React.FC = () => {
                       {detailsCustomer.status}
                     </span>
                   </div>
+                  <div><strong>GSTIN:</strong> {detailsCustomer.gstin || '-'}</div>
+                  <div><strong>Preferred Driver:</strong> {detailsCustomer.preferred_driver_id || '-'}</div>
+                  <div><strong>Grace Cylinder Recovery:</strong> {detailsCustomer.enable_grace_cylinder_recovery ? 'Yes' : 'No'}</div>
+                  <div><strong>Grace Period Days:</strong> {detailsCustomer.grace_period_cylinder_recovery_days ?? '-'}</div>
+                  <div><strong>Created Date:</strong> {detailsCustomer.created_at ? formatDate(detailsCustomer.created_at) : '-'}</div>
                 </div>
               </div>
               <div>
@@ -883,36 +1036,82 @@ export const CustomersPage: React.FC = () => {
                   {detailsCustomer.address_line2 && <div><strong>Address 2:</strong> {detailsCustomer.address_line2}</div>}
                   <div><strong>City:</strong> {detailsCustomer.city}</div>
                   <div><strong>State:</strong> {detailsCustomer.state}</div>
-                                     <div><strong>Postal Code:</strong> {detailsCustomer.postal_code || '-'}</div>
-                   <div><strong>Country:</strong> Nigeria</div>
-                   <div><strong>Credit Limit:</strong> ₹0.00</div>
-                   <div><strong>Credit Period:</strong> {detailsCustomer.credit_period || '30'} days</div>
-                   <div><strong>Created Date:</strong> {detailsCustomer.created_at ? formatDate(detailsCustomer.created_at) : '-'}</div>
+                  <div><strong>Postal Code:</strong> {detailsCustomer.postal_code || '-'}</div>
+                  <div><strong>Country:</strong> {detailsCustomer.country || '-'}</div>
+                  <div><strong>Credit Limit:</strong> ₹{detailsCustomer.credit_limit ?? '0.00'}</div>
+                  <div><strong>Credit Period:</strong> {detailsCustomer.credit_period_days || '30'} days</div>
                 </div>
               </div>
             </div>
-            
-            {/* Additional Actions */}
-            <div className="mt-6 pt-6 border-t border-gray-200">
-              <h3 className="text-lg font-semibold mb-3">Actions</h3>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => openEditModal(detailsCustomer)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm"
-                >
-                  Edit Customer
-                </button>
-                <button
-                  onClick={() => handleDeleteCustomer(detailsCustomer.customer_id)}
-                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded text-sm"
-                >
-                  Delete Customer
-                </button>
-              </div>
+            {/* Contacts Section */}
+            <div className="mt-6">
+              <h3 className="text-lg font-semibold mb-2">Contact Persons</h3>
+              {detailsCustomer.contacts && detailsCustomer.contacts.length > 0 ? (
+                <table className="w-full text-sm border">
+                  <thead>
+                    <tr className="bg-gray-100">
+                      <th className="p-2 text-left">Name</th>
+                      <th className="p-2 text-left">Phone</th>
+                      <th className="p-2 text-left">Email</th>
+                      <th className="p-2 text-center">Primary</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detailsCustomer.contacts.map((c, idx) => (
+                      <tr key={idx} className="border-t">
+                        <td className="p-2">{c.name}</td>
+                        <td className="p-2">{c.phone}</td>
+                        <td className="p-2">{c.email}</td>
+                        <td className="p-2 text-center">{c.is_primary ? 'Yes' : ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : <div className="text-gray-500">No contacts found.</div>}
+            </div>
+            {/* Cylinder Discounts Section */}
+            <div className="mt-6">
+              <h3 className="text-lg font-semibold mb-2">Cylinder Discounts</h3>
+              {detailsCustomer.cylinder_discounts && detailsCustomer.cylinder_discounts.length > 0 ? (
+                <table className="w-full text-sm border">
+                  <thead>
+                    <tr className="bg-gray-100">
+                      <th className="p-2 text-left">Cylinder Type</th>
+                      <th className="p-2 text-right">Discount (₹)</th>
+                      <th className="p-2 text-right">Capacity (kg)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detailsCustomer.cylinder_discounts.map((d, idx) => (
+                      <tr key={idx} className="border-t">
+                        <td className="p-2">{d.cylinder_type_name || '-'}</td>
+                        <td className="p-2 text-right">{(d.per_cylinder_discount ?? d.per_kg_discount ?? 0)}</td>
+                        <td className="p-2 text-right">{typeof d.capacity_kg === 'number' ? d.capacity_kg : d.capacity_kg || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : <div className="text-gray-500">No discounts found.</div>}
+            </div>
+            <div className="flex justify-end mt-4">
+              <button
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-semibold"
+                onClick={() => handleSavePreferredDriver()}
+                disabled={savingDriver}
+              >
+                {savingDriver ? 'Saving...' : 'Save Preferred Driver'}
+              </button>
+              <button
+                className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded font-semibold ml-2"
+                onClick={() => handleSaveStopSupply()}
+                disabled={savingStop}
+              >
+                {savingStop ? 'Saving...' : 'Save Stop Supply'}
+              </button>
             </div>
           </div>
         </div>
       )}
     </div>
   );
-}; 
+};

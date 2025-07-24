@@ -28,6 +28,7 @@ const ocrRoutes = require('./routes/ocrRoutes.js');
 const vehicleRoutes = require('./routes/vehicles.js');
 const zohoOAuthRoutes = require('./zohoOAuth.js');
 const gstRoutes = require('./controllers/gstController.js');
+const driverRoutes = require('./routes/drivers.js');
 
 dotenv.config();
 
@@ -102,7 +103,8 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/ocr', ocrRoutes);
-app.use('/api/vehicle', vehicleRoutes);
+app.use('/api/drivers', driverRoutes);
+app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/gst', gstRoutes);
 
 // Zoho OAuth Routes

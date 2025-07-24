@@ -12,4 +12,5 @@ module.exports.checkRole = (allowedRoles) => {
     }
     next();
   };
-}; 
+};
+module.exports.default = module.exports.checkRole; 

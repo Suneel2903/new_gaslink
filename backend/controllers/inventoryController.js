@@ -13,6 +13,7 @@ const getInventorySummary = async (req, res) => {
     if (!targetDistributorId && role !== 'super_admin') {
       return res.status(400).json({ error: 'Missing distributor_id in request.' });
     }
+    console.log('INVENTORY SUMMARY DEBUG: targetDistributorId:', targetDistributorId, 'role:', role);
     // Get all cylinder types with names
     const cylinderTypesResult = await pool.query(
       `SELECT cylinder_type_id, name FROM cylinder_types WHERE is_active = TRUE AND deleted_at IS NULL`
@@ -20,6 +21,13 @@ const getInventorySummary = async (req, res) => {
     const cylinderTypes = cylinderTypesResult.rows;
     const summaries = [];
     for (const cylinderType of cylinderTypes) {
+      // Fetch threshold for this cylinder type
+      const thresholdResult = await pool.query(
+        `SELECT threshold_quantity FROM settings_cylinder_thresholds WHERE distributor_id = $1 AND cylinder_type_id = $2`,
+        [targetDistributorId, cylinderType.cylinder_type_id]
+      );
+      const threshold = thresholdResult.rows[0]?.threshold_quantity ?? 50;
+      console.log(`INVENTORY SUMMARY DEBUG: Cylinder ${cylinderType.name} (${cylinderType.cylinder_type_id}) threshold:`, threshold);
       // 1. Fetch previous day's closing balances
       let prev;
       if (role === 'super_admin' && !targetDistributorId) {
@@ -37,18 +45,25 @@ const getInventorySummary = async (req, res) => {
       const opening_empties = prev.rows[0]?.closing_empties || 0;
 
       // 2. Fetch AC4 additions (iocl_invoice_flat)
-      // Use regex to match cylinder type in material_description
-      const ac4Regex = new RegExp(`^${cylinderType.name.replace(/\s+/g, '\\s*')}\\b`, 'i');
+      // Use cylinder_type_id and date from confirmed_data, only confirmed, use confirmed_data quantity
       const ac4Result = await pool.query(
-        `SELECT COALESCE(SUM(quantity),0) AS ac4_qty FROM iocl_invoice_flat WHERE date = $1 AND material_description ~* $2`,
-        [date, ac4Regex.source]
+        `SELECT COALESCE(SUM((confirmed_data->>'quantity')::numeric),0) AS ac4_qty
+         FROM iocl_invoice_flat
+         WHERE confirmed = true
+           AND confirmed_data->>'date' = $1
+           AND confirmed_data->>'cylinder_type_id' = $2`,
+        [date, cylinderType.cylinder_type_id]
       );
       const ac4_qty = Number(ac4Result.rows[0]?.ac4_qty || 0);
 
       // 3. Fetch ERV removals (erv_challan_flat)
-      // Use equipment_code to match cylinder_type_id
+      // Use cylinder_type_id and date from confirmed_data, only confirmed, use confirmed_data quantity
       const ervResult = await pool.query(
-        `SELECT COALESCE(SUM(quantity),0) AS erv_qty FROM erv_challan_flat WHERE delivery_challan_date = $1 AND equipment_code = $2`,
+        `SELECT COALESCE(SUM((confirmed_data->>'quantity')::numeric),0) AS erv_qty
+         FROM erv_challan_flat
+         WHERE confirmed = true
+           AND confirmed_data->>'date' = $1
+           AND confirmed_data->>'cylinder_type_id' = $2`,
         [date, cylinderType.cylinder_type_id]
       );
       const erv_qty = Number(ervResult.rows[0]?.erv_qty || 0);
@@ -168,7 +183,8 @@ const getInventorySummary = async (req, res) => {
         customer_unaccounted,
         inventory_unaccounted,
         closing_fulls,
-        closing_empties
+        closing_empties,
+        threshold // Add threshold to summary
       });
     }
     res.json({ data: summaries });
@@ -918,6 +934,134 @@ const getCustomerDeliveryHistory = async (req, res) => {
   }
 };
 
+// Recalculate inventory summary for a single date/cylinder_type/distributor
+async function recalculateInventorySummaryForType(date, cylinder_type_id, distributor_id) {
+  // Fetch threshold for this cylinder type
+  const thresholdResult = await pool.query(
+    `SELECT threshold_quantity FROM settings_cylinder_thresholds WHERE distributor_id = $1 AND cylinder_type_id = $2`,
+    [distributor_id, cylinder_type_id]
+  );
+  const threshold = thresholdResult.rows[0]?.threshold_quantity ?? 50;
+  // 1. Fetch previous day's closing balances
+  const prev = await pool.query(
+    `SELECT closing_fulls, closing_empties FROM inventory_daily_summary WHERE date < $1 AND cylinder_type_id = $2 AND distributor_id = $3 ORDER BY date DESC LIMIT 1`,
+    [date, cylinder_type_id, distributor_id]
+  );
+  const opening_fulls = prev.rows[0]?.closing_fulls || 0;
+  const opening_empties = prev.rows[0]?.closing_empties || 0;
+  // 2. Fetch AC4 additions
+  const ac4Result = await pool.query(
+    `SELECT COALESCE(SUM((confirmed_data->>'quantity')::numeric),0) AS ac4_qty
+     FROM iocl_invoice_flat
+     WHERE confirmed = true
+       AND confirmed_data->>'date' = $1
+       AND confirmed_data->>'cylinder_type_id' = $2`,
+    [date, cylinder_type_id]
+  );
+  const ac4_qty = Number(ac4Result.rows[0]?.ac4_qty || 0);
+  // 3. Fetch ERV removals
+  const ervResult = await pool.query(
+    `SELECT COALESCE(SUM((confirmed_data->>'quantity')::numeric),0) AS erv_qty
+     FROM erv_challan_flat
+     WHERE confirmed = true
+       AND confirmed_data->>'date' = $1
+       AND confirmed_data->>'cylinder_type_id' = $2`,
+    [date, cylinder_type_id]
+  );
+  const erv_qty = Number(ervResult.rows[0]?.erv_qty || 0);
+  // 4. Fetch manual adjustments
+  const adjResult = await pool.query(
+    `SELECT COALESCE(SUM(requested_value),0) AS manual_adj FROM inventory_adjustment_requests WHERE date = $1 AND cylinder_type_id = $2 AND distributor_id = $3 AND status = 'approved'`,
+    [date, cylinder_type_id, distributor_id]
+  );
+  const manual_adj = Number(adjResult.rows[0]?.manual_adj || 0);
+  // 5. Fetch soft-blocked quantity
+  const softBlockResult = await pool.query(
+    `SELECT COALESCE(SUM(oi.quantity),0) AS soft_blocked_qty
+     FROM orders o
+     JOIN order_items oi ON o.order_id = oi.order_id
+     WHERE o.status IN ('pending','processing')
+       AND o.delivery_date = $1
+       AND oi.cylinder_type_id = $2
+       AND o.distributor_id = $3`,
+    [date, cylinder_type_id, distributor_id]
+  );
+  const soft_blocked_qty = Number(softBlockResult.rows[0]?.soft_blocked_qty || 0);
+  // 6. Fetch delivered quantities and returned empties
+  const deliveryResult = await pool.query(
+    `SELECT COALESCE(SUM(delivered_qty),0) AS delivered_qty, COALESCE(SUM(collected_empties_qty),0) AS collected_empties_qty
+     FROM inventory_daily_summary WHERE date = $1 AND cylinder_type_id = $2 AND distributor_id = $3`,
+    [date, cylinder_type_id, distributor_id]
+  );
+  const delivered_qty = Number(deliveryResult.rows[0]?.delivered_qty || 0);
+  const collected_empties_qty = Number(deliveryResult.rows[0]?.collected_empties_qty || 0);
+  // 7. Fetch customer_unaccounted
+  const custUnaccResult = await pool.query(
+    `SELECT customer_unaccounted FROM inventory_daily_summary WHERE date = $1 AND cylinder_type_id = $2 AND distributor_id = $3`,
+    [date, cylinder_type_id, distributor_id]
+  );
+  const customer_unaccounted = Number(custUnaccResult.rows[0]?.customer_unaccounted || 0);
+  // 8. Compute closing balances
+  const closing_fulls = opening_fulls + ac4_qty - erv_qty - delivered_qty - manual_adj - customer_unaccounted;
+  const closing_empties = opening_empties + collected_empties_qty + erv_qty;
+  // 9. Compute inventory_unaccounted
+  const invUnaccResult = await pool.query(
+    `SELECT COALESCE(SUM(count),0) AS total_unaccounted FROM inventory_unaccounted_audit_log WHERE date = $1 AND cylinder_type_id = $2 AND distributor_id = $3`,
+    [date, cylinder_type_id, distributor_id]
+  );
+  const inventory_unaccounted = Number(invUnaccResult.rows[0]?.total_unaccounted || 0);
+  // 10. Auto-save calculated summary to database for carry-forward
+  try {
+    const existingSummary = await pool.query(
+      `SELECT id FROM inventory_daily_summary WHERE date = $1 AND cylinder_type_id = $2 AND distributor_id = $3`,
+      [date, cylinder_type_id, distributor_id]
+    );
+    if (existingSummary.rows.length === 0) {
+      await pool.query(
+        `INSERT INTO inventory_daily_summary (
+          date, cylinder_type_id, distributor_id, 
+          opening_fulls, opening_empties,
+          ac4_qty, erv_qty, soft_blocked_qty,
+          delivered_qty, collected_empties_qty,
+          customer_unaccounted, inventory_unaccounted,
+          closing_fulls, closing_empties,
+          status, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'calculated', NOW())`,
+        [
+          date, cylinder_type_id, distributor_id,
+          opening_fulls, opening_empties,
+          ac4_qty, erv_qty, soft_blocked_qty,
+          delivered_qty, collected_empties_qty,
+          customer_unaccounted, inventory_unaccounted,
+          closing_fulls, closing_empties
+        ]
+      );
+    } else {
+      const summaryId = existingSummary.rows[0].id;
+      await pool.query(
+        `UPDATE inventory_daily_summary SET 
+          opening_fulls = $1, opening_empties = $2,
+          ac4_qty = $3, erv_qty = $4, soft_blocked_qty = $5,
+          delivered_qty = $6, collected_empties_qty = $7,
+          customer_unaccounted = $8, inventory_unaccounted = $9,
+          closing_fulls = $10, closing_empties = $11,
+          updated_at = NOW()
+         WHERE id = $12 AND status = 'calculated'`,
+        [
+          opening_fulls, opening_empties,
+          ac4_qty, erv_qty, soft_blocked_qty,
+          delivered_qty, collected_empties_qty,
+          customer_unaccounted, inventory_unaccounted,
+          closing_fulls, closing_empties,
+          summaryId
+        ]
+      );
+    }
+  } catch (saveError) {
+    console.error('Error auto-saving inventory summary:', saveError);
+  }
+}
+
 module.exports = {
   getInventorySummary,
   upsertInventorySummary,
@@ -936,5 +1080,6 @@ module.exports = {
   logInventoryAudit,
   logInventoryUnaccounted,
   getInventoryUnaccountedLog,
-  getCustomerDeliveryHistory
+  getCustomerDeliveryHistory,
+  recalculateInventorySummaryForType // Exported for use in ocrController.js
 }; 

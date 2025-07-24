@@ -1,6 +1,7 @@
 const { exec } = require('child_process');
 const path = require('path');
 const db = require('../db');
+const { recalculateInventorySummaryForType } = require('./inventoryController');
 
 // Helper to parse Indian date string to PostgreSQL timestamp format
 function parseIndianDatetime(str) {
@@ -73,7 +74,9 @@ exports.handleIOCLUpload = async (req, res) => {
           ) VALUES (
             $1, $2, $3, $4, $5, $6, $7,
             $8, $9, $10, $11, $12, $13
-          )`,
+          )
+          ON CONFLICT (invoice_no, material_description, date) DO NOTHING
+        `,
         values: [
           file.originalname,
           fields.tax_invoice_no,
@@ -103,7 +106,27 @@ exports.handleIOCLUpload = async (req, res) => {
 exports.handleGetCorporationInvoices = async (req, res) => {
   try {
     const result = await db.query('SELECT * FROM iocl_invoice_flat ORDER BY created_at DESC');
-    res.json({ invoices: result.rows });
+    // Ensure each row has confirmed, extracted_data, and status
+    const invoices = result.rows.map(row => ({
+      ...row,
+      confirmed: !!row.confirmed,
+      status: row.confirmed ? 'confirmed' : 'unconfirmed',
+      extracted_data: row.extracted_data || row.confirmed_data || {
+        tax_invoice_no: row.tax_invoice_no,
+        invoice_no: row.invoice_no,
+        tt_no: row.tt_no,
+        date: row.date,
+        eway_bill: row.eway_bill,
+        po_ref: row.po_ref,
+        item_no: row.item_no,
+        material_code: row.material_code,
+        material_description: row.material_description,
+        quantity: row.quantity,
+        unit: row.unit,
+        hsn_code: row.hsn_code
+      }
+    }));
+    res.json({ invoices });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch corporation invoices', details: err.message });
   }
@@ -170,8 +193,81 @@ exports.handleERVUpload = async (req, res) => {
 exports.handleGetOutgoingERVs = async (req, res) => {
   try {
     const result = await db.query('SELECT * FROM erv_challan_flat ORDER BY created_at DESC');
-    res.json({ ervs: result.rows });
+    // Ensure each row has confirmed, extracted_data, and status
+    const ervs = result.rows.map(row => ({
+      ...row,
+      invoice_id: row.erv_id, // normalize for frontend confirm logic
+      confirmed: !!row.confirmed,
+      status: row.confirmed ? 'confirmed' : 'unconfirmed',
+      extracted_data: row.extracted_data || row.confirmed_data || {
+        distributor_sap_code: row.distributor_sap_code,
+        sap_plant_code: row.sap_plant_code,
+        ac4_no: row.ac4_no,
+        ac4_date: row.ac4_date,
+        ac4_receipt_datetime: row.ac4_receipt_datetime,
+        sap_doc_no: row.sap_doc_no,
+        delivery_challan_no: row.delivery_challan_no,
+        delivery_challan_date: row.delivery_challan_date,
+        truck_no: row.truck_no,
+        driver_name: row.driver_name,
+        eway_bill_amount: row.eway_bill_amount,
+        remarks: row.remarks,
+        equipment_code: row.equipment_code,
+        return_description: row.return_description,
+        quantity: row.quantity
+      }
+    }));
+    res.json({ ervs });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch outgoing ERVs', details: err.message });
+  }
+};
+
+// Confirm an OCR invoice (AC4 or ERV) and store user-edited values
+exports.confirmInvoice = async (req, res) => {
+  try {
+    const { invoice_id, type, confirmed_data } = req.body;
+    if (!invoice_id || !type) {
+      return res.status(400).json({ error: 'Missing invoice_id or type' });
+    }
+    let table;
+    if (type === 'ac4') {
+      table = 'iocl_invoice_flat';
+    } else if (type === 'erv') {
+      table = 'erv_challan_flat';
+    } else {
+      return res.status(400).json({ error: 'Invalid type (must be ac4 or erv)' });
+    }
+    const result = await db.query(
+      `UPDATE ${table} SET confirmed = true, confirmed_data = $1 WHERE id = $2 RETURNING *`,
+      [confirmed_data ? JSON.stringify(confirmed_data) : null, invoice_id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    // Real-time inventory summary update
+    const updated = result.rows[0];
+    // Prefer confirmed_data, fallback to updated row fields
+    let date = (confirmed_data && confirmed_data.date) || (updated.confirmed_data && updated.confirmed_data.date);
+    let cylinder_type_id = (confirmed_data && confirmed_data.cylinder_type_id) || (updated.confirmed_data && updated.confirmed_data.cylinder_type_id);
+    let distributor_id = (confirmed_data && confirmed_data.distributor_sap_code) || updated.distributor_sap_code || updated.distributor_id;
+    // If still missing, try to parse from JSON string
+    if (typeof updated.confirmed_data === 'string') {
+      try {
+        const parsed = JSON.parse(updated.confirmed_data);
+        date = date || parsed.date;
+        cylinder_type_id = cylinder_type_id || parsed.cylinder_type_id;
+        distributor_id = distributor_id || parsed.distributor_sap_code || parsed.distributor_id;
+      } catch (e) {}
+    }
+    if (date && cylinder_type_id && distributor_id) {
+      await recalculateInventorySummaryForType(date, cylinder_type_id, distributor_id);
+    } else {
+      console.warn('Could not trigger real-time inventory summary update: missing date, cylinder_type_id, or distributor_id', { date, cylinder_type_id, distributor_id });
+    }
+    res.json({ success: true, invoice: result.rows[0] });
+  } catch (err) {
+    console.error('Error confirming invoice:', err);
+    res.status(500).json({ error: 'Failed to confirm invoice', details: err.message });
   }
 }; 

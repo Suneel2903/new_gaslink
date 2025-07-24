@@ -1,17 +1,13 @@
 const dotenv = require('dotenv');
 dotenv.config();
-const pkg = require('pg');
-const { Pool } = pkg;
+const { Pool } = require('pg');
 
 const pool = new Pool({
-  user: process.env.DB_USER || 'marri',
   host: process.env.DB_HOST || 'localhost',
-  database: process.env.DB_NAME || 'your_db',
-  password: process.env.DB_PASSWORD || 'admin123',
-  port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : 5432,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  port: process.env.DB_PORT || 5432,
+  user: 'postgres',
+  password: 'admin123',
+  database: process.env.DB_NAME || 'gaslink_db', // Use .env or default to gaslink_db
 });
 
 // Enhanced query logging

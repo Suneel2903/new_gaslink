@@ -11,7 +11,8 @@ const {
     getAllInvoices,
     downloadInvoicePdf,
     getInvoiceByOrderId,
-    getInvoiceById
+    getInvoiceById,
+    generateIRNForInvoice
 } = require('../controllers/invoiceController.js');
 
 const router = express.Router();
@@ -33,5 +34,6 @@ router.post('/:id/credit-note', checkRole(['super_admin', 'finance', 'distributo
 router.post('/:id/cancel', checkRole(['super_admin', 'finance', 'distributor_admin']), cancelInvoice);
 router.post('/update-statuses', checkRole(['super_admin', 'finance', 'distributor_admin']), updateInvoiceStatuses);
 router.post('/check-multiple', checkRole(['super_admin', 'finance', 'distributor_admin']), require('../controllers/invoiceController').checkMultipleInvoices);
+router.post('/:id/generate-irn', checkRole(['super_admin', 'finance', 'distributor_admin']), generateIRNForInvoice);
 
 module.exports = router; 

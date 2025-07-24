@@ -128,8 +128,61 @@ const getDefaultDueDateSettings = async (req, res) => {
   }
 };
 
+// Get all cylinder thresholds for a distributor
+const getCylinderThresholds = async (req, res) => {
+  const distributor_id = req.user?.distributor_id || req.query.distributor_id || req.body.distributor_id;
+  if (!distributor_id) {
+    return res.status(400).json({ error: 'Distributor ID is required' });
+  }
+  try {
+    const client = await pool.connect();
+    // Get all cylinder types and their thresholds (if set)
+    const result = await client.query(`
+      SELECT ct.cylinder_type_id, ct.name, COALESCE(sct.threshold_quantity, 50) as threshold
+      FROM cylinder_types ct
+      LEFT JOIN settings_cylinder_thresholds sct
+        ON ct.cylinder_type_id = sct.cylinder_type_id AND sct.distributor_id = $1
+      WHERE ct.is_active = TRUE AND ct.deleted_at IS NULL
+      ORDER BY ct.name
+    `, [distributor_id]);
+    client.release();
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    console.error('Error fetching cylinder thresholds:', error);
+    res.status(500).json({ error: 'Failed to fetch cylinder thresholds', details: error.message });
+  }
+};
+
+// Update cylinder thresholds for a distributor
+const updateCylinderThresholds = async (req, res) => {
+  const distributor_id = req.user?.distributor_id || req.body.distributor_id;
+  const { thresholds } = req.body; // [{cylinder_type_id, threshold}]
+  if (!distributor_id || !Array.isArray(thresholds)) {
+    return res.status(400).json({ error: 'Distributor ID and thresholds array are required' });
+  }
+  try {
+    const client = await pool.connect();
+    await client.query('BEGIN');
+    for (const { cylinder_type_id, threshold } of thresholds) {
+      await client.query(`
+        INSERT INTO settings_cylinder_thresholds (distributor_id, cylinder_type_id, threshold_quantity, alert_enabled, updated_at)
+        VALUES ($1, $2, $3, TRUE, NOW())
+        ON CONFLICT (distributor_id, cylinder_type_id) DO UPDATE SET threshold_quantity = $3, updated_at = NOW()
+      `, [distributor_id, cylinder_type_id, threshold]);
+    }
+    await client.query('COMMIT');
+    client.release();
+    res.json({ success: true, message: 'Thresholds updated successfully' });
+  } catch (error) {
+    console.error('Error updating cylinder thresholds:', error);
+    res.status(500).json({ error: 'Failed to update cylinder thresholds', details: error.message });
+  }
+};
+
 module.exports = {
   getDistributorSettings,
   updateDistributorSettings,
-  getDefaultDueDateSettings
+  getDefaultDueDateSettings,
+  getCylinderThresholds,
+  updateCylinderThresholds,
 }; 

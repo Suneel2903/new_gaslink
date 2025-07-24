@@ -14,6 +14,7 @@ import FormSelect from '../components/FormSelect';
 import { paymentService } from '../services/paymentService';
 import type { Customer, OutstandingInvoice, CreatePaymentRequest } from '../types';
 import { api } from '../services/apiClient';
+import axios from '../services/apiClient';
 
 interface UploadResult {
   success?: boolean;
@@ -123,6 +124,8 @@ const InvoicesPage: React.FC = () => {
   const [paymentNotes, setPaymentNotes] = useState('');
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+
+  const [orderStatusLog, setOrderStatusLog] = useState<any[]>([]);
 
   const {
     register: registerCreditNote,
@@ -491,6 +494,14 @@ const InvoicesPage: React.FC = () => {
       setActionLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (selectedInvoice) {
+      axios.get(`/order-status-log?order_id=${selectedInvoice.order_id}`).then(res => {
+        setOrderStatusLog(res.data?.log || []);
+      }).catch(() => setOrderStatusLog([]));
+    }
+  }, [selectedInvoice]);
 
   // Defensive UI checks
   if (isSuperAdmin && !distributor_id) {
@@ -958,6 +969,34 @@ const InvoicesPage: React.FC = () => {
                   </tbody>
                 </table>
               </div>
+              {/* Order Status Log */}
+              {orderStatusLog.length > 0 && (
+                <div className="mt-6">
+                  <h3 className="text-lg font-semibold mb-2">Order Status History</h3>
+                  <table className="min-w-full divide-y divide-gray-200 text-xs">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-2 py-1">Previous Status</th>
+                        <th className="px-2 py-1">New Status</th>
+                        <th className="px-2 py-1">Changed By</th>
+                        <th className="px-2 py-1">Changed At</th>
+                        <th className="px-2 py-1">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orderStatusLog.map((log: any) => (
+                        <tr key={log.log_id}>
+                          <td className="px-2 py-1">{log.previous_status}</td>
+                          <td className="px-2 py-1">{log.new_status}</td>
+                          <td className="px-2 py-1">{log.changed_by}</td>
+                          <td className="px-2 py-1">{new Date(log.changed_at).toLocaleString()}</td>
+                          <td className="px-2 py-1">{log.notes}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         </div>

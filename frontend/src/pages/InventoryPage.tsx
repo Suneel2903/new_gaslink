@@ -92,6 +92,7 @@ export const InventoryPage: React.FC = () => {
     const debug = (globalThis as any).__debuglog || console.log;
     debug(`INVENTORY DEBUG: Selected date string: ${selectedStr}, Today string: ${todayStr}`);
     debug(`INVENTORY DEBUG: Comparison result: selectedStr > todayStr = ${selectedStr > todayStr}`);
+    debug('INVENTORY DEBUG: Using distributor_id:', distributor_id);
     if (isFutureDate(selectedStr, todayStr)) {
       setSummary([]);
       setCancelledStock([]);
@@ -119,7 +120,7 @@ export const InventoryPage: React.FC = () => {
 
   useEffect(() => {
     fetchInventory();
-  }, [date, distributor_id, isSuperAdmin]);
+  }, [date, distributor_id]);
 
   // Modal handlers
   const openUnaccountedModal = async (cylinderType: string) => {
@@ -179,195 +180,194 @@ export const InventoryPage: React.FC = () => {
 
   return (
     <div className="py-6 w-full max-w-6xl mx-auto">
-      <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Inventory Summary</h1>
-          <p className="text-gray-600 dark:text-gray-400">Track and manage daily inventory by cylinder type</p>
+      {/* Inventory Summary Heading and Table */}
+      <div className="mb-2 w-full p-0 m-0">
+        <div className="flex flex-row items-end justify-between w-full p-0 m-0">
+          <div className="flex flex-col p-0 m-0">
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white text-left mb-1 p-0 m-0">Inventory Summary</h1>
+            <p className="text-gray-600 dark:text-gray-400 text-left mb-2 p-0 m-0">Track and manage daily inventory by cylinder type</p>
+          </div>
+          <div className="flex items-center gap-2 mb-2 p-0 m-0">
+            <button
+              className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold"
+              onClick={() => changeDateBy(-1)}
+              aria-label="Previous day"
+            >
+              &#8592;
+            </button>
+            <input type="date" value={date} onChange={e => setDate(e.target.value)} className="input-field" />
+            <button
+              className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold"
+              onClick={() => changeDateBy(1)}
+              aria-label="Next day"
+            >
+              &#8594;
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold"
-            onClick={() => changeDateBy(-1)}
-            aria-label="Previous day"
-          >
-            &#8592;
-          </button>
-          <input type="date" value={date} onChange={e => setDate(e.target.value)} className="input-field" />
-          <button
-            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold"
-            onClick={() => changeDateBy(1)}
-            aria-label="Next day"
-          >
-            &#8594;
-          </button>
-        </div>
-      </div>
-      {success && <div className="mb-4 p-3 bg-green-100 text-green-700 rounded-lg">{success}</div>}
-      {error && <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg">{error}</div>}
-      
+        {success && <div className="mb-4 p-3 bg-green-100 text-green-700 rounded-lg">{success}</div>}
+        {error && <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg">{error}</div>}
+        
 
-      
-      <div className="w-full flex justify-center">
-        <div className="w-full max-w-[1200px]">
-          {isFutureDate(selectedStr, todayStr) ? (
-            <div className="p-6 max-w-7xl mx-auto">
-              <div className="card">
-                <div className="p-8 text-center text-gray-500">
-                  Inventory data for future dates is not available yet.
+        
+        <div className="w-full flex justify-center">
+          <div className="w-full min-w-[1800px] overflow-x-auto">
+            {isFutureDate(selectedStr, todayStr) ? (
+              <div className="p-6 max-w-7xl mx-auto">
+                <div className="card">
+                  <div className="p-8 text-center text-gray-500">
+                    Inventory data for future dates is not available yet.
+                  </div>
                 </div>
               </div>
-            </div>
-          ) : summary.length === 0 ? (
-            <div className="p-6 max-w-7xl mx-auto"><div className="card"><EmptyState message="No inventory data found for this date." /></div></div>
-          ) : (
-            <table className="w-full bg-white dark:bg-gray-800 rounded-2xl shadow-lg text-sm" style={{ tableLayout: 'fixed' }}>
-              <colgroup>
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '7%' }} />
-                <col style={{ width: '7%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '7%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '7%' }} />
-                <col style={{ width: '8%' }} />
-              </colgroup>
-              <thead>
-                <tr className="bg-blue-600 text-white">
-                  <th className="px-2 py-3 font-bold">Cylinder Type</th>
-                  <th className="px-2 py-3 font-bold">Opening Fulls</th>
-                  <th className="px-2 py-3 font-bold">Opening Empties</th>
-                  <th className="px-2 py-3 font-bold">AC4 Qty</th>
-                  <th className="px-2 py-3 font-bold">ERV Qty</th>
-                  <th className="px-2 py-3 font-bold">Soft Blocked</th>
-                  <th className="px-2 py-3 font-bold">Cancelled Stock</th>
-                  <th className="px-2 py-3 font-bold">Delivered Fulls Qty</th>
-                  <th className="px-2 py-3 font-bold">Collected Empties Qty</th>
-                  <th className="px-2 py-3 font-bold">Customer Unaccounted</th>
-                  <th className="px-2 py-3 font-bold">Inventory Unaccounted</th>
-                  <th className="px-2 py-3 font-bold">Closing Fulls</th>
-                  <th className="px-2 py-3 font-bold">Closing Empties</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.map((row, idx) => (
-                  <tr
-                    key={row.cylinder_type}
-                    className={
-                      (idx % 2 === 0 ? 'bg-white dark:bg-gray-800' : 'bg-blue-50 dark:bg-gray-700') +
-                      ' hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors duration-150'
-                    }
-                    style={{ fontSize: '0.98rem' }}
-                  >
-                    <td className="px-2 py-3 font-semibold whitespace-nowrap">{row.cylinder_type}</td>
-                    <td className="px-2 py-3 text-center whitespace-nowrap">{row.opening_fulls}</td>
-                    <td className="px-2 py-3 text-center whitespace-nowrap">{row.opening_empties}</td>
-                    <td className="px-2 py-3 text-center whitespace-nowrap">{row.ac4_qty}</td>
-                    <td className="px-2 py-3 text-center whitespace-nowrap">{row.erv_qty}</td>
-                    <td className="px-2 py-3 text-center whitespace-nowrap">{row.soft_blocked_qty}</td>
-                    <td className="px-2 py-3 text-center whitespace-nowrap">
-                      {(() => {
-                        const cancelledCount = getCancelledStockCount(row.cylinder_type);
-                        return cancelledCount > 0 ? (
-                          <button 
-                            className="text-red-700 font-bold underline hover:text-red-900"
-                            onClick={() => openCancelledStockModal(row.cylinder_type)}
-                          >
-                            {cancelledCount}
-                          </button>
-                        ) : (
-                          cancelledCount
-                        );
-                      })()}
-                    </td>
-                    <td className="px-2 py-3 text-center whitespace-nowrap">{row.delivered_qty}</td>
-                    <td className="px-2 py-3 text-center whitespace-nowrap">{row.collected_empties_qty}</td>
-                    <td className="px-2 py-3 text-center whitespace-nowrap">
-                      {row.customer_unaccounted > 0 ? (
-                        <span className="inline-block px-2 py-1 rounded bg-yellow-100 text-yellow-800 font-bold">{row.customer_unaccounted}</span>
-                      ) : (
-                        row.customer_unaccounted
-                      )}
-                    </td>
-                    <td className="px-2 py-3 text-center whitespace-nowrap">
-                      <button className="text-blue-700 font-bold underline" onClick={() => openUnaccountedModal(row.cylinder_type)}>
-                        {row.inventory_unaccounted > 0 ? (
-                          <span className="inline-block px-2 py-1 rounded bg-red-100 text-red-800 font-bold">{row.inventory_unaccounted}</span>
-                        ) : (
-                          row.inventory_unaccounted
-                        )}
-                      </button>
-                    </td>
-                    <td className="px-2 py-3 text-center whitespace-nowrap">
-                      {row.closing_fulls < 0 ? (
-                        <span className="inline-block px-2 py-1 rounded bg-red-100 text-red-800 font-bold">{row.closing_fulls}</span>
-                      ) : (
-                        row.closing_fulls
-                      )}
-                    </td>
-                    <td className="px-2 py-3 text-center whitespace-nowrap">{row.closing_empties}</td>
+            ) : summary.length === 0 ? (
+              <div className="p-6 max-w-7xl mx-auto"><div className="card"><EmptyState message="No inventory data found for this date." /></div></div>
+            ) : (
+              <table className="w-full bg-white dark:bg-gray-800 rounded-2xl shadow-lg text-sm p-0 m-0" style={{ width: '100%' }}>
+                <colgroup>
+                  <col style={{ width: '140px', paddingLeft: 0, marginLeft: 0 }} />
+                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '140px' }} />
+                </colgroup>
+                <thead>
+                  <tr className="bg-blue-600 text-white">
+                    <th className="px-4 py-4 font-bold text-base">Cylinder Type</th>
+                    <th className="px-4 py-4 font-bold text-base">Threshold</th>
+                    <th className="px-4 py-4 font-bold text-base">Opening Fulls</th>
+                    <th className="px-4 py-4 font-bold text-base">Opening Empties</th>
+                    <th className="px-4 py-4 font-bold text-base">AC4 Qty</th>
+                    <th className="px-4 py-4 font-bold text-base">ERV Qty</th>
+                    <th className="px-4 py-4 font-bold text-base">Soft Blocked</th>
+                    <th className="px-4 py-4 font-bold text-base">Cancelled Stock</th>
+                    <th className="px-4 py-4 font-bold text-base">Delivered Fulls Qty</th>
+                    <th className="px-4 py-4 font-bold text-base">Collected Empties Qty</th>
+                    <th className="px-4 py-4 font-bold text-base">Customer Unaccounted</th>
+                    <th className="px-4 py-4 font-bold text-base">Inventory Unaccounted</th>
+                    <th className="px-4 py-4 font-bold text-base">Closing Fulls</th>
+                    <th className="px-4 py-4 font-bold text-base">Closing Empties</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+                </thead>
+                <tbody>
+                  {summary.map((row, idx) => (
+                    <tr
+                      key={row.cylinder_type}
+                      className={
+                        (idx % 2 === 0 ? 'bg-white dark:bg-gray-800' : 'bg-blue-50 dark:bg-gray-700') +
+                        ' hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors duration-150'
+                      }
+                      style={{ fontSize: '1.05rem' }}
+                    >
+                      <td className="px-0 py-4 font-semibold whitespace-nowrap">{row.cylinder_type}</td>
+                      <td className="px-4 py-4 text-center font-medium whitespace-nowrap">{row.threshold ?? 50}</td>
+                      <td className="px-4 py-4 text-center font-medium whitespace-nowrap">{row.opening_fulls}</td>
+                      <td className="px-4 py-4 text-center font-medium whitespace-nowrap">{row.opening_empties}</td>
+                      <td className="px-4 py-4 text-center font-medium whitespace-nowrap">{row.ac4_qty}</td>
+                      <td className="px-4 py-4 text-center font-medium whitespace-nowrap">{row.erv_qty}</td>
+                      <td className="px-4 py-4 text-center font-medium whitespace-nowrap">{row.soft_blocked_qty}</td>
+                      <td className="px-4 py-4 text-center font-medium whitespace-nowrap">
+                        {(() => {
+                          const cancelledCount = getCancelledStockCount(row.cylinder_type);
+                          return cancelledCount > 0 ? (
+                            <button 
+                              className="text-red-700 font-bold underline hover:text-red-900"
+                              onClick={() => openCancelledStockModal(row.cylinder_type)}
+                            >
+                              {cancelledCount}
+                            </button>
+                          ) : (
+                            cancelledCount
+                          );
+                        })()}
+                      </td>
+                      <td className="px-4 py-4 text-center font-medium whitespace-nowrap">{row.delivered_qty}</td>
+                      <td className="px-4 py-4 text-center font-medium whitespace-nowrap">{row.collected_empties_qty}</td>
+                      <td className="px-4 py-4 text-center font-medium whitespace-nowrap">
+                        {row.customer_unaccounted > 0 ? (
+                          <span className="inline-block px-2 py-1 rounded bg-yellow-100 text-yellow-800 font-bold">{row.customer_unaccounted}</span>
+                        ) : (
+                          row.customer_unaccounted
+                        )}
+                      </td>
+                      <td className="px-4 py-4 text-center font-medium whitespace-nowrap">
+                        <button className="text-blue-700 font-bold underline" onClick={() => openUnaccountedModal(row.cylinder_type)}>
+                          {row.inventory_unaccounted > 0 ? (
+                            <span className="inline-block px-2 py-1 rounded bg-red-100 text-red-800 font-bold">{row.inventory_unaccounted}</span>
+                          ) : (
+                            row.inventory_unaccounted
+                          )}
+                        </button>
+                      </td>
+                      <td className="px-4 py-4 text-center font-medium whitespace-nowrap">
+                        {row.closing_fulls < 0 ? (
+                          <span className="inline-block px-2 py-1 rounded bg-red-100 text-red-800 font-bold">{row.closing_fulls}</span>
+                        ) : (
+                          row.closing_fulls
+                        )}
+                      </td>
+                      <td className="px-4 py-4 text-center font-medium whitespace-nowrap">{row.closing_empties}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
       </div>
       {/* Inventory Flow Card: Two Halves, Explanation Left, Diagram Right */}
-      <div className="flex justify-center mt-6 mb-2">
-        <div className="w-full max-w-6xl bg-white rounded-xl shadow-lg border border-gray-200 flex flex-row items-stretch overflow-hidden" style={{ minHeight: 340 }}>
-          {/* Left: Daily Flow Written Explanation */}
-          <div className="flex-1 flex flex-col justify-center items-start p-6 bg-gray-50 dark:bg-gray-900" style={{ minWidth: 260 }}>
-            <div className="text-lg font-bold mb-3 text-gray-900">Inventory Daily Flow</div>
-            <ul className="list-none pl-0 text-base text-gray-800 dark:text-gray-100 space-y-2">
-              <li><span style={{color:'#16a34a', fontWeight:'bold', fontSize:'1.2em'}}>➕</span> <b>AC4 Qty</b>: Received from corporation (added to stock).</li>
-              <li><span style={{color:'#16a34a', fontWeight:'bold', fontSize:'1.2em'}}>➕</span> <b>Collected Empties Qty</b>: Empties collected from customers (added to stock).</li>
-              <li><span style={{color:'#dc2626', fontWeight:'bold', fontSize:'1.2em'}}>➖</span> <b>ERV Qty</b>: Sent back to corporation (removed from stock).</li>
-              <li><span style={{color:'#dc2626', fontWeight:'bold', fontSize:'1.2em'}}>➖</span> <b>Delivered Fulls Qty</b>: Delivered to customers (removed from stock).</li>
-              <li><span style={{color:'#dc2626', fontWeight:'bold', fontSize:'1.2em'}}>➖</span> <b>Soft Blocked</b>: Reserved for pending/processing orders (temporarily unavailable).</li>
-              <li><span style={{color:'#dc2626', fontWeight:'bold', fontSize:'1.2em'}}>➖</span> <b>Cancelled Stock</b>: In vehicles from cancelled deliveries (temporarily unavailable).</li>
-              <li><span style={{color:'#dc2626', fontWeight:'bold', fontSize:'1.2em'}}>➖</span> <b>Customer Unaccounted</b>: With customers, not yet returned (missing from depot).</li>
-              <li><span style={{color:'#dc2626', fontWeight:'bold', fontSize:'1.2em'}}>➖</span> <b>Inventory Unaccounted</b>: Missing/unaccounted in depot (lost/damaged).</li>
-              <li><b>Opening Fulls / Empties</b>: Start of day (from yesterday's closing).</li>
-              <li><b>Closing Fulls / Empties</b>: End of day (becomes tomorrow's opening).</li>
-            </ul>
-          </div>
-          {/* Right: Diagram Section */}
-          <div className="flex-1 relative flex items-center justify-center p-4 bg-white" style={{ minWidth: 320, minHeight: 320 }}>
-            <div className="w-full max-w-xl flex justify-center items-center" style={{ minHeight: 260 }}>
-              <Mermaid chart={`
-                flowchart TD
-                  A["Yesterday's Closing\n(Fulls/Empties)" ] -->|"Carry Forward"| B["Today's Opening\n(Fulls/Empties)"]
-                  B --> C["<span style='color:#16a34a;font-weight:bold'>+ AC4 Qty</span>\n(Received from Corp)"]
-                  B --> D["<span style='color:#dc2626;font-weight:bold'>- ERV Qty</span>\n(Sent to Corp)"]
-                  B --> E["<span style='color:#dc2626;font-weight:bold'>- Delivered Fulls</span>\n(To Customers)"]
-                  B --> F["<span style='color:#16a34a;font-weight:bold'>+ Collected Empties</span>\n(From Customers)"]
-                  B --> G["<span style='color:#dc2626;font-weight:bold'>- Soft Blocked</span>\n(Reserved for Orders)"]
-                  B --> H["<span style='color:#dc2626;font-weight:bold'>- Cancelled Stock</span>\n(In Vehicles)"]
-                  B --> I["<span style='color:#dc2626;font-weight:bold'>- Customer Unaccounted</span>\n(With Customers)"]
-                  B --> J["<span style='color:#dc2626;font-weight:bold'>- Inventory Unaccounted</span>\n(Lost/Damaged)"]
-                  C & D & E & F & G & H & I & J --> K["Today's Closing\n(Fulls/Empties)"]
-                  K -->|"Carry Forward"| L["Tomorrow's Opening"]
-                  %% Style additions and subtractions
-                  classDef add fill:#bbf7d0,stroke:#16a34a,color:#166534;
-                  classDef sub fill:#fee2e2,stroke:#dc2626,color:#991b1b;
-                  class C,F add;
-                  class D,E,G,H,I,J sub;
-              `} />
+      <div className="flex justify-center mt-0 mb-0">
+        <div className="w-full min-w-[1800px] max-w-[1800px] bg-white rounded-xl shadow-lg border border-gray-200 flex flex-row items-stretch overflow-hidden" style={{ minHeight: 340 }}>
+          <div className="flex flex-row w-full h-full gap-2 mb-1 mt-1">
+            {/* Left: Daily Flow Written Explanation */}
+            <div className="flex-1 flex flex-col justify-center items-start p-2 bg-gray-50 dark:bg-gray-900" style={{ minWidth: 260 }}>
+              <ul className="list-none pl-0 text-base text-gray-800 dark:text-gray-100 space-y-2">
+                <li><span style={{color:'#2563eb', fontWeight:'bold', fontSize:'1.2em'}}>⚠️</span> <b>Threshold</b>: The minimum stock level for each cylinder type. If closing fulls fall below this value, an automatic alert is triggered and a replenishment request is sent to the corporation. The threshold can be configured in the Settings page.</li>
+                <li><span style={{color:'#16a34a', fontWeight:'bold', fontSize:'1.2em'}}>➕</span> <b>AC4 Qty</b>: Received from corporation (added to stock).</li>
+                <li><span style={{color:'#16a34a', fontWeight:'bold', fontSize:'1.2em'}}>➕</span> <b>Collected Empties Qty</b>: Empties collected from customers (added to stock).</li>
+                <li><span style={{color:'#dc2626', fontWeight:'bold', fontSize:'1.2em'}}>➖</span> <b>ERV Qty</b>: Sent back to corporation (removed from stock).</li>
+                <li><span style={{color:'#dc2626', fontWeight:'bold', fontSize:'1.2em'}}>➖</span> <b>Delivered Fulls Qty</b>: Delivered to customers (removed from stock).</li>
+                <li><span style={{color:'#dc2626', fontWeight:'bold', fontSize:'1.2em'}}>➖</span> <b>Soft Blocked</b>: Reserved for pending/processing orders (temporarily unavailable).</li>
+                <li><span style={{color:'#dc2626', fontWeight:'bold', fontSize:'1.2em'}}>➖</span> <b>Cancelled Stock</b>: In vehicles from cancelled deliveries (temporarily unavailable).</li>
+                <li><span style={{color:'#dc2626', fontWeight:'bold', fontSize:'1.2em'}}>➖</span> <b>Customer Unaccounted</b>: With customers, not yet returned (missing from depot).</li>
+                <li><span style={{color:'#dc2626', fontWeight:'bold', fontSize:'1.2em'}}>➖</span> <b>Inventory Unaccounted</b>: Missing/unaccounted in depot (lost/damaged).</li>
+                <li><b>Opening Fulls / Empties</b>: Start of day (from yesterday's closing).</li>
+                <li><b>Closing Fulls / Empties</b>: End of day (becomes tomorrow's opening).</li>
+              </ul>
             </div>
-            {/* Expand Icon Overlay */}
-            <button
-              className="absolute top-2 right-2 bg-white/80 hover:bg-white rounded-full p-1 shadow border border-gray-300"
-              style={{ zIndex: 2 }}
-              onClick={() => setShowDiagramModal(true)}
-              aria-label="Expand Diagram"
-            >
-              <FiMaximize2 size={18} />
-            </button>
+            {/* Right: Diagram Section */}
+            <div className="flex-1 relative flex flex-col items-center justify-center p-2 bg-white cursor-pointer" style={{ minWidth: 320, minHeight: 320 }} onClick={() => setShowDiagramModal(true)}>
+              <div className="w-full max-w-xl flex justify-center items-center" style={{ minHeight: 260 }}>
+                <Mermaid chart={`
+                  flowchart TD
+                    A["Yesterday's Closing\n(Fulls/Empties)" ] -->|"Carry Forward"| B["Today's Opening\n(Fulls/Empties)"]
+                    B --> C["<span style='color:#16a34a;font-weight:bold'>+ AC4 Qty</span>\n(Received from Corp)"]
+                    B --> D["<span style='color:#dc2626;font-weight:bold'>- ERV Qty</span>\n(Sent to Corp)"]
+                    B --> E["<span style='color:#dc2626;font-weight:bold'>- Delivered Fulls</span>\n(To Customers)"]
+                    B --> F["<span style='color:#16a34a;font-weight:bold'>+ Collected Empties</span>\n(From Customers)"]
+                    B --> G["<span style='color:#dc2626;font-weight:bold'>- Soft Blocked</span>\n(Reserved for Orders)"]
+                    B --> H["<span style='color:#dc2626;font-weight:bold'>- Cancelled Stock</span>\n(In Vehicles)"]
+                    B --> I["<span style='color:#dc2626;font-weight:bold'>- Customer Unaccounted</span>\n(With Customers)"]
+                    B --> J["<span style='color:#dc2626;font-weight:bold'>- Inventory Unaccounted</span>\n(Lost/Damaged)"]
+                    C & D & E & F & G & H & I & J --> K["Today's Closing\n(Fulls/Empties)"]
+                    K -->|"Carry Forward"| L["Tomorrow's Opening"]
+                    %% Style additions and subtractions
+                    classDef add fill:#bbf7d0,stroke:#16a34a,color:#166534;
+                    classDef sub fill:#fee2e2,stroke:#dc2626,color:#991b1b;
+                    class C,F add;
+                    class D,E,G,H,I,J sub;
+                `} />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -474,11 +474,11 @@ export const InventoryPage: React.FC = () => {
               </button>
             </div>
             
-            {cancelledStockModal.stock.length === 0 ? (
+            {cancelledStockModal.stock.filter(stock => !stock.moved_to_inventory).length === 0 ? (
               <div className="text-center py-8">
-                <p className="text-gray-500">No cancelled stock found for this cylinder type.</p>
+                <p className="text-gray-500">No cancelled stock available to move for this cylinder type.</p>
               </div>
-            ) : (
+            ) :
               <div>
                 <div className="mb-4 p-3 bg-blue-50 rounded-lg">
                   <p className="text-sm text-blue-800">
@@ -486,7 +486,6 @@ export const InventoryPage: React.FC = () => {
                     Any gaps should be clearly observed here before moving cancelled stock to depot inventory.
                   </p>
                 </div>
-                
                 <table className="w-full border-collapse border border-gray-300">
                   <thead>
                     <tr className="bg-gray-100">
@@ -494,10 +493,11 @@ export const InventoryPage: React.FC = () => {
                       <th className="border border-gray-300 px-3 py-2 text-left">Driver</th>
                       <th className="border border-gray-300 px-3 py-2 text-center">Quantity</th>
                       <th className="border border-gray-300 px-3 py-2 text-center">Action</th>
+                      <th className="border border-gray-300 px-3 py-2 text-center">Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {cancelledStockModal.stock.map((stock, index) => (
+                    {cancelledStockModal.stock.filter(stock => !stock.moved_to_inventory).map((stock, index) => (
                       <tr key={index} className="hover:bg-gray-50">
                         <td className="border border-gray-300 px-3 py-2">
                           <div className="flex items-center">
@@ -522,16 +522,15 @@ export const InventoryPage: React.FC = () => {
                             Move to Depot
                           </button>
                         </td>
+                        <td className="border border-gray-300 px-3 py-2 text-center">
+                          <span className="inline-block px-2 py-1 rounded bg-yellow-100 text-yellow-800 font-bold">Available to Move</span>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                
-                <div className="mt-4 text-sm text-gray-600">
-                  <p>💡 <strong>Note:</strong> Moving cylinders to depot inventory will make them available for new orders.</p>
-                </div>
               </div>
-            )}
+            }
           </div>
         </div>
       )}

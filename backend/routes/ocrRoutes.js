@@ -1,5 +1,5 @@
 const express = require('express');
-const { processInvoice, handleIOCLUpload, handleGetCorporationInvoices, handleERVUpload, handleGetOutgoingERVs } = require('../controllers/ocrController.js');
+const { processInvoice, handleIOCLUpload, handleGetCorporationInvoices, handleERVUpload, handleGetOutgoingERVs, confirmInvoice } = require('../controllers/ocrController.js');
 const { verifyFirebaseToken } = require('../middleware/auth.js');
 const multer = require('multer');
 const path = require('path');
@@ -20,5 +20,6 @@ router.post('/invoice/upload', upload.single('pdf'), handleIOCLUpload);
 router.get('/corporation-invoices', handleGetCorporationInvoices);
 router.post('/erv/upload', upload.single('pdf'), handleERVUpload);
 router.get('/outgoing-ervs', handleGetOutgoingERVs);
+router.post('/confirm-invoice', confirmInvoice);
 
 module.exports = router; 
